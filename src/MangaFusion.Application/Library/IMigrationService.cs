@@ -38,7 +38,7 @@ public sealed record MigrationBatchDetail(
 /// <summary>Migrates CBZ files from an old (non-MangaFusion) downloader's inbox layout — one
 /// subfolder per series, one file per chapter — into the library. Scans + matches against MangaDex
 /// in the background; every series is held for review afterwards (regardless of how clean the match
-/// is), since committing also re-encodes pages and can take a while — see <see cref="CommitAllCleanAsync"/>
+/// is), since committing also re-encodes pages and can take a while — see <see cref="StartCommitAllCleanAsync"/>
 /// for clearing the no-conflict majority in one action. Nothing on disk moves until a series is
 /// committed.</summary>
 public interface IMigrationService
@@ -70,13 +70,24 @@ public interface IMigrationService
     /// overwritten) instead of creating a new one; pass null to clear.</summary>
     Task SetMergeTargetAsync(Guid migrationSeriesId, Guid? existingLibrarySeriesId, CancellationToken ct = default);
 
-    /// <summary>Commits a reviewed series: creates/merges the library series and moves its files.
-    /// Throws if items are still pending/unresolved.</summary>
-    Task CommitSeriesAsync(Guid migrationSeriesId, CancellationToken ct = default);
+    /// <summary>Enqueues a background commit of a reviewed series (create/merge the library series, move
+    /// its files, re-encode pages) and returns immediately — the batch sits in <c>Committing</c> while it
+    /// runs, poll it for completion. Validates up front and throws if the series is missing or already
+    /// committed. The heavy work runs off the request thread so a large series can't be killed by a
+    /// client/proxy timeout mid-commit.</summary>
+    Task StartCommitSeriesAsync(Guid migrationSeriesId, CancellationToken ct = default);
 
-    /// <summary>Commits every not-yet-committed series in the batch that has no conflict and a
-    /// resolved (non-Unmatched) regime — the unambiguous majority a full scan typically produces —
-    /// without needing to click Commit on each individually. A failure on one series doesn't stop the
-    /// rest. Returns the number actually committed.</summary>
-    Task<int> CommitAllCleanAsync(Guid batchId, CancellationToken ct = default);
+    /// <summary>Hangfire job entry point for <see cref="StartCommitSeriesAsync"/> — not normally called
+    /// directly.</summary>
+    Task RunCommitSeriesAsync(Guid migrationSeriesId, CancellationToken ct);
+
+    /// <summary>Enqueues a background commit of every not-yet-committed series in the batch that has no
+    /// conflict and a resolved (non-Unmatched) regime — the unambiguous majority a full scan typically
+    /// produces. Returns immediately; the batch sits in <c>Committing</c> while it runs. A failure on
+    /// one series is recorded on it and doesn't stop the rest.</summary>
+    Task StartCommitAllCleanAsync(Guid batchId, CancellationToken ct = default);
+
+    /// <summary>Hangfire job entry point for <see cref="StartCommitAllCleanAsync"/> — not normally called
+    /// directly.</summary>
+    Task RunCommitAllCleanAsync(Guid batchId, CancellationToken ct);
 }

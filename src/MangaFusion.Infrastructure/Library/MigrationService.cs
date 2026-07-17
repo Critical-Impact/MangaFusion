@@ -201,14 +201,63 @@ public sealed class MigrationService(
             migrationSeriesId, existingLibrarySeriesId?.ToString() ?? "(none — create new)");
     }
 
-    public async Task CommitSeriesAsync(Guid migrationSeriesId, CancellationToken ct = default)
+    public async Task StartCommitSeriesAsync(Guid migrationSeriesId, CancellationToken ct = default)
     {
+        // Validate synchronously so a bad/already-committed request fails the HTTP call fast; the actual
+        // commit is heavy (file moves + page re-encode) so it runs off the request thread — otherwise a
+        // client/proxy timeout aborts it mid-write (RequestAborted would cancel the CopyToAsync).
         var migrationSeries = await LoadSeriesAsync(migrationSeriesId, ct);
         EnsureNotCommitted(migrationSeries);
-        logger.LogDebug("Migration review: manually committing series {SeriesId} ({Folder}).",
-            migrationSeriesId, migrationSeries.FolderName);
-        await committer.CommitAsync(migrationSeries, ct);
+
+        migrationSeries.Batch.Status = MigrationBatchStatus.Committing;
         await db.SaveChangesAsync(ct);
+
+        jobs.Enqueue<MigrationService>(s => s.RunCommitSeriesAsync(migrationSeriesId, CancellationToken.None));
+    }
+
+    [AutomaticRetry(Attempts = 0)]
+    public async Task RunCommitSeriesAsync(Guid migrationSeriesId, CancellationToken ct)
+    {
+        var migrationSeries = await LoadSeriesAsync(migrationSeriesId, ct);
+        var batch = migrationSeries.Batch;
+        logger.LogDebug("Migration review: committing series {SeriesId} ({Folder}).",
+            migrationSeriesId, migrationSeries.FolderName);
+        try
+        {
+            await committer.CommitAsync(migrationSeries, ct);
+            await db.SaveChangesAsync(ct);
+        }
+        catch (OperationCanceledException)
+        {
+            // Graceful shutdown mid-commit — leave the series NeedsReview to retry, don't mark it Failed.
+            batch.Status = MigrationBatchStatus.Done;
+            await db.SaveChangesAsync(CancellationToken.None);
+            throw;
+        }
+        catch (Exception ex)
+        {
+            migrationSeries.Status = MigrationSeriesStatus.Failed;
+            migrationSeries.ConflictReason = $"Commit failed: {ex.Message}";
+            logger.LogError(ex, "Migration commit failed for series {SeriesId} ({Folder}).",
+                migrationSeries.Id, migrationSeries.FolderName);
+        }
+
+        batch.Status = MigrationBatchStatus.Done;
+        await db.SaveChangesAsync(CancellationToken.None);
+    }
+
+    public async Task StartCommitAllCleanAsync(Guid batchId, CancellationToken ct = default)
+    {
+        var batch = await db.MigrationBatches.FirstOrDefaultAsync(b => b.Id == batchId, ct);
+        if (batch is null)
+        {
+            throw new InvalidOperationException("Migration batch not found.");
+        }
+
+        batch.Status = MigrationBatchStatus.Committing;
+        await db.SaveChangesAsync(ct);
+
+        jobs.Enqueue<MigrationService>(s => s.RunCommitAllCleanAsync(batchId, CancellationToken.None));
     }
 
     /// <summary>Commits every not-yet-committed, unambiguous series in a batch — the same "clean"
@@ -216,35 +265,64 @@ public sealed class MigrationService(
     /// <see cref="ProcessFolderAsync"/>) — so the (usually large) no-conflict majority can be cleared
     /// in one action after reviewing/fixing the flagged ones. A failure on one series is recorded on
     /// it (<see cref="MigrationSeriesStatus.Failed"/>, error as <see cref="MigrationSeries.ConflictReason"/>)
-    /// and doesn't stop the rest. Returns the number actually committed.</summary>
-    public async Task<int> CommitAllCleanAsync(Guid batchId, CancellationToken ct = default)
+    /// and doesn't stop the rest. Hangfire job entry point.</summary>
+    [AutomaticRetry(Attempts = 0)]
+    public async Task RunCommitAllCleanAsync(Guid batchId, CancellationToken ct)
     {
-        var candidates = await db.MigrationSeries
-            .Include(s => s.Items)
-            .Include(s => s.Batch)
-            .Where(s => s.BatchId == batchId && s.Status == MigrationSeriesStatus.NeedsReview)
-            .ToListAsync(ct);
-
-        var committed = 0;
-        foreach (var series in candidates.Where(IsClean))
+        var batch = await db.MigrationBatches.FirstOrDefaultAsync(b => b.Id == batchId, ct);
+        if (batch is null)
         {
-            try
-            {
-                await committer.CommitAsync(series, ct);
-                committed++;
-            }
-            catch (Exception ex)
-            {
-                series.Status = MigrationSeriesStatus.Failed;
-                series.ConflictReason = $"Bulk commit failed: {ex.Message}";
-                logger.LogError(ex, "Migration bulk commit failed for series {SeriesId} ({Folder}).",
-                    series.Id, series.FolderName);
-            }
-
-            await db.SaveChangesAsync(ct);
+            return;
         }
 
-        return committed;
+        try
+        {
+            var candidates = await db.MigrationSeries
+                .Include(s => s.Items)
+                .Include(s => s.Batch)
+                .Where(s => s.BatchId == batchId && s.Status == MigrationSeriesStatus.NeedsReview)
+                .ToListAsync(ct);
+
+            foreach (var series in candidates.Where(IsClean))
+            {
+                ct.ThrowIfCancellationRequested();
+                try
+                {
+                    await committer.CommitAsync(series, ct);
+                }
+                catch (OperationCanceledException)
+                {
+                    throw; // shutdown/abort — leave this series NeedsReview, don't record it as Failed
+                }
+                catch (Exception ex)
+                {
+                    series.Status = MigrationSeriesStatus.Failed;
+                    series.ConflictReason = $"Bulk commit failed: {ex.Message}";
+                    logger.LogError(ex, "Migration bulk commit failed for series {SeriesId} ({Folder}).",
+                        series.Id, series.FolderName);
+                }
+
+                await db.SaveChangesAsync(ct);
+            }
+
+            batch.Status = MigrationBatchStatus.Done;
+            await db.SaveChangesAsync(ct);
+        }
+        catch (OperationCanceledException)
+        {
+            // Interrupted (shutdown): reset to Done so the batch stays reviewable/retryable rather than
+            // stuck in Committing; already-committed series keep their status, the rest stay NeedsReview.
+            batch.Status = MigrationBatchStatus.Done;
+            await db.SaveChangesAsync(CancellationToken.None);
+            throw;
+        }
+        catch (Exception ex)
+        {
+            batch.Status = MigrationBatchStatus.Failed;
+            batch.Error = ex.Message;
+            logger.LogError(ex, "Migration bulk commit failed for batch {BatchId}.", batchId);
+            await db.SaveChangesAsync(CancellationToken.None);
+        }
     }
 
     private static bool IsClean(MigrationSeries series) =>
@@ -309,13 +387,15 @@ public sealed class MigrationService(
         migrationSeries.Items.Clear();
         foreach (var item in match.Items)
         {
-            // A matched item is keyed by MangaDex's own number (ResolvedNumber), not the local file's, so
-            // its NumberKey agrees with the feed-derived Chapter ChapterImporter creates at commit — see
-            // the drift explanation in MigrationMatcher.Resolve. A null ResolvedNumber is itself a
-            // meaningful matched value (mirrors the feed's own null), so it must still go through Normalize
-            // rather than falling back to the local number.
+            // A matched item is keyed by MangaDex's own number+title (ResolvedNumber/ResolvedTitle), not
+            // the local file's, so its NumberKey agrees with the feed-derived Chapter ChapterImporter
+            // creates at commit — see the drift explanation in MigrationMatcher.Resolve. Normalize must be
+            // called the same way the importer calls it (number + title): a null ResolvedNumber is itself a
+            // meaningful matched value (mirrors the feed's own null), and for a numberless oneshot the feed
+            // title is what distinguishes its key ("title-<title>") from the bare "oneshot" key — omitting
+            // it here is what made a titled oneshot fail to find its imported release at commit.
             var (number, numberKey) = item.MatchedSourceChapterId is not null
-                ? (item.ResolvedNumber, ChapterNumber.Normalize(item.ResolvedNumber).Key)
+                ? (item.ResolvedNumber, ChapterNumber.Normalize(item.ResolvedNumber, title: item.ResolvedTitle).Key)
                 : (item.File.Number, item.File.NumberKey);
 
             var newItem = new MigrationItem

@@ -22,7 +22,8 @@ public sealed record MatchedItem(
     MigrationItemDisposition Disposition,
     bool IsWinner,
     string? FlagReason,
-    string? ResolvedNumber = null);
+    string? ResolvedNumber = null,
+    string? ResolvedTitle = null);
 
 /// <summary>The full outcome of matching one inbox series folder against MangaDex.</summary>
 public sealed record MatchResult(
@@ -288,13 +289,16 @@ public sealed class MigrationMatcher(ISourceRegistry registry, ILogger<Migration
 
         var chapter = candidates[0];
         var group = chapter.ScanlationGroups.Count > 0 ? chapter.ScanlationGroups[0] : null;
-        // Carry MangaDex's own chapter number alongside the local one — they can drift (a mod
-        // renumbering the chapter on MangaDex after the old downloader grabbed it) even though the
-        // UUID still matches. ApplyMatchAsync must persist the feed's number for matched items so it
-        // agrees with the Chapter that ChapterImporter creates from the same feed at commit time;
-        // otherwise commit fails with "matched release was not found after importing the feed".
+        // Carry MangaDex's own chapter number AND title alongside the local one — they can drift (a mod
+        // renumbering the chapter on MangaDex after the old downloader grabbed it) even though the UUID
+        // still matches. ApplyMatchAsync must key matched items off the feed's number+title so the
+        // NumberKey agrees with the Chapter that ChapterImporter creates from the same feed at commit
+        // (it keys by Normalize(number, title:) — the title matters for a numberless oneshot, whose key
+        // is "title-<title>" not "oneshot"); otherwise commit fails with "matched release was not found
+        // after importing the feed".
         return new MatchedItem(
-            file, chapter.SourceChapterId, group, MigrationItemDisposition.Pending, false, null, chapter.Number);
+            file, chapter.SourceChapterId, group, MigrationItemDisposition.Pending, false, null,
+            chapter.Number, chapter.Title);
     }
 
     // --- Group ranking -------------------------------------------------------------------------

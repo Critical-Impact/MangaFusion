@@ -69,23 +69,27 @@
     }
   }
 
+  // The batch sits in 'Scanning' or 'Committing' while a background job runs; both are watched the same way.
+  const isBusyStatus = (s: string) => s === 'Scanning' || s === 'Committing'
+
   async function openBatch(id: string) {
     try {
       batch = await getMigrationBatch(id)
-      if (batch.status === 'Scanning') watch(id)
+      if (isBusyStatus(batch.status)) watch(id)
     } catch (err) {
       notify.error(msgOf(err))
     }
   }
 
-  function watch(id: string) {
+  function watch(id: string, onDone?: (batch: MigrationBatchDetail) => void) {
     clearInterval(timer)
     timer = setInterval(async () => {
       const updated = await getMigrationBatch(id)
       batch = updated
-      if (updated.status !== 'Scanning') {
+      if (!isBusyStatus(updated.status)) {
         clearInterval(timer)
         batches = await getMigrationBatches()
+        onDone?.(updated)
       }
     }, 2500)
   }
@@ -152,14 +156,22 @@
       ? batch.series.filter((s) => s.status === 'NeedsReview' && !s.conflictReason && s.regime !== 'Unmatched').length
       : 0,
   )
+  // A background commit is in flight for this batch — block starting another one (or a scan) meanwhile.
+  let committing = $derived(batch?.status === 'Committing')
 
   async function commitAllClean() {
     if (!batch) return
+    const id = batch.id
+    const before = committedCount
     busy['commit-all'] = true
     try {
-      const { committed } = await commitAllCleanMigrationSeries(batch.id)
-      notify.success(`Committed ${committed} series.`)
-      await openBatch(batch.id)
+      await commitAllCleanMigrationSeries(id)
+      // The commit now runs in the background; poll the batch and report the delta when it finishes.
+      await openBatch(id)
+      watch(id, (done) => {
+        const gained = done.series.filter((s) => s.status === 'Committed').length - before
+        notify.success(gained > 0 ? `Committed ${gained} series.` : 'Commit finished.')
+      })
     } catch (err) {
       notify.error(msgOf(err))
     } finally {
@@ -170,7 +182,7 @@
 
 <div class="flex flex-col gap-4">
   <section class="flex items-center gap-[0.6rem]">
-    <Button onclick={scan} disabled={scanning}>
+    <Button onclick={scan} disabled={scanning || committing}>
       {#if scanning}<Spinner />{/if}
       {scanning ? 'Starting…' : 'Scan inbox'}
     </Button>
@@ -194,9 +206,10 @@
     <p class="text-[0.85rem] text-text-mute">No migration batches yet. Drop series folders into the configured inbox, then scan.</p>
   {:else}
     <p class="flex items-center gap-1.5 text-[0.85rem] text-text-mute">
-      {#if batch.status === 'Scanning'}<Spinner />{/if}
+      {#if isBusyStatus(batch.status)}<Spinner />{/if}
       Batch {new Date(batch.createdAt).toLocaleString()} — <strong class={statusClass(batch.status)}>{batch.status}</strong>
       {#if batch.status === 'Scanning'}(matching against MangaDex…){/if}
+      {#if batch.status === 'Committing'}(committing in the background…){/if}
       {#if batch.error}<span class="text-err-soft"> — {batch.error}</span>{/if}
     </p>
 
@@ -210,9 +223,9 @@
     {/if}
 
     {#if readyCount > 0}
-      <Button variant="secondary" onclick={commitAllClean} disabled={busy['commit-all']}>
-        {#if busy['commit-all']}<Spinner />{/if}
-        {busy['commit-all'] ? 'Committing…' : `Commit all clean matches (${readyCount})`}
+      <Button variant="secondary" onclick={commitAllClean} disabled={busy['commit-all'] || committing}>
+        {#if busy['commit-all'] || committing}<Spinner />{/if}
+        {busy['commit-all'] || committing ? 'Committing…' : `Commit all clean matches (${readyCount})`}
       </Button>
     {/if}
 
@@ -364,11 +377,11 @@
 
               {#if s.status !== 'Committed'}
                 <Button
-                  disabled={busy[s.id + ':commit']}
+                  disabled={busy[s.id + ':commit'] || committing}
                   onclick={() => act(s.id + ':commit', () => commitMigrationSeries(s.id))}
                 >
-                  {#if busy[s.id + ':commit']}<Spinner />{/if}
-                  {busy[s.id + ':commit'] ? 'Committing…' : 'Commit this series'}
+                  {#if busy[s.id + ':commit'] || committing}<Spinner />{/if}
+                  {busy[s.id + ':commit'] || committing ? 'Committing…' : 'Commit this series'}
                 </Button>
               {/if}
             </div>

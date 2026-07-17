@@ -81,7 +81,8 @@ public static class MigrationEndpoints
     {
         try
         {
-            await migration.CommitSeriesAsync(id, ct);
+            await migration.StartCommitSeriesAsync(id, ct);
+            // Enqueued to run in the background; the client polls the batch (now Committing) for completion.
             return Results.NoContent();
         }
         catch (InvalidOperationException ex)
@@ -92,8 +93,15 @@ public static class MigrationEndpoints
 
     private static async Task<IResult> CommitAllClean(Guid id, IMigrationService migration, CancellationToken ct)
     {
-        var committed = await migration.CommitAllCleanAsync(id, ct);
-        return Results.Ok(new { committed });
+        try
+        {
+            await migration.StartCommitAllCleanAsync(id, ct);
+            return Results.NoContent();
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(new { error = ex.Message });
+        }
     }
 
     private sealed record SetMatchRequest(string? SourceSeriesId);

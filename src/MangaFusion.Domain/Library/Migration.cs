@@ -5,6 +5,9 @@ public enum MigrationBatchStatus
     Scanning = 0,
     Done = 1,
     Failed = 2,
+    // A commit (single series or all-clean) is running in the background. Returns to Done when it
+    // finishes; the UI polls the batch while it's in this state, same as it does for Scanning.
+    Committing = 3,
 }
 
 /// <summary>Whether a series' chapters are still on the source (Live), have been purged from the

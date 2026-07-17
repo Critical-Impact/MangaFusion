@@ -797,11 +797,13 @@ export const setMigrationMergeTarget = (seriesId: string, existingLibrarySeriesI
 export const setMigrationItemDisposition = (itemId: string, disposition: string) =>
   send<void>(`/api/migration/items/${itemId}`, 'PATCH', { disposition })
 
+// Both commit endpoints enqueue a background job and return immediately (204); the batch moves to
+// 'Committing' and the caller polls it for completion.
 export const commitMigrationSeries = (seriesId: string) =>
   send<void>(`/api/migration/series/${seriesId}/commit`, 'POST', {})
 
 export const commitAllCleanMigrationSeries = (batchId: string) =>
-  send<{ committed: number }>(`/api/migration/batches/${batchId}/commit-clean`, 'POST', {})
+  send<void>(`/api/migration/batches/${batchId}/commit-clean`, 'POST', {})
 
 // --- MangaUpdates import wizard ------------------------------------------------------------------
 

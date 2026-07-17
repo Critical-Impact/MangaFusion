@@ -42,6 +42,40 @@ public class MigrationMatcherTests
     }
 
     [Fact]
+    public async Task Matched_oneshot_carries_the_feed_title_so_its_key_agrees_with_the_importer()
+    {
+        // Reproduces "#Project AC": a numberless oneshot whose MangaDex chapter has a title. ChapterImporter
+        // keys chapters by Normalize(number, title:), so a titled oneshot's key is "title-<title>", not the
+        // bare "oneshot". The matcher must carry the feed title through so ApplyMatchAsync persists the same
+        // key — otherwise the imported release lands on a different chapter and commit fails with
+        // "matched release ... was not found after importing the feed".
+        const string uuid = "9ed789b1-d4f6-4277-a35f-f3ac9ba52914";
+        const string feedTitle = "Oneshot";
+        var source = new FakeMangaDexSource
+        {
+            SearchResults = [new SourceSeries { SourceId = "mangadex", SourceSeriesId = "s1", Title = "#Project AC" }],
+            Feed = [new SourceChapter { SourceId = "mangadex", SourceChapterId = uuid, Number = null, Title = feedTitle, Language = "en", ScanlationGroups = ["Some Group"] }],
+        };
+        var matcher = new MigrationMatcher(new FakeSourceRegistry(source));
+        var folder = new ScannedSeriesFolder("#Project AC", "/x",
+            [File("Chapter-_[EN-data]_Oneshot_9ed789b1.cbz", "9ed789b1", null, title: "Oneshot")]);
+
+        var result = await matcher.MatchAsync(folder, CancellationToken.None);
+
+        var item = Assert.Single(result.Items);
+        Assert.Equal(uuid, item.MatchedSourceChapterId);
+        Assert.Null(item.ResolvedNumber);
+        Assert.Equal(feedTitle, item.ResolvedTitle);
+
+        // The key ApplyMatchAsync persists (from the resolved feed number+title) must equal the key
+        // ChapterImporter creates from the same feed chapter — and it must be the titled key, not "oneshot".
+        var migrationKey = MangaFusion.Application.Library.ChapterNumber.Normalize(item.ResolvedNumber, title: item.ResolvedTitle).Key;
+        var importerKey = MangaFusion.Application.Library.ChapterNumber.Normalize(null, title: feedTitle).Key;
+        Assert.Equal(importerKey, migrationKey);
+        Assert.Equal("title-oneshot", migrationKey);
+    }
+
+    [Fact]
     public async Task Purged_series_still_commits_via_local_releases_when_title_matches_strongly()
     {
         // Mirrors Nagatoro: the feed has nothing for these chapters (licensed & delisted), but the
