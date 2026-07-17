@@ -131,6 +131,7 @@
       <a href="/browse" use:link class={navLinkClass(router.location.startsWith('/browse'))}>Browse</a>
     {/if}
     <a href="/library" use:link class={navLinkClass(router.location.startsWith('/library'))}>Library</a>
+    <a href="/collections" use:link class={navLinkClass(router.location.startsWith('/collections'))}>Collections</a>
     <a href="/activity" use:link class={navLinkClass(router.location === '/activity')}>
       Activity{#if activeCount > 0}
         <span class="ml-[0.3rem] inline-block rounded-full bg-brand-soft px-[0.4rem] py-[0.15rem] text-[0.68rem] leading-none font-bold text-surface-2">
@@ -185,6 +186,7 @@
         <DropdownMenuItem class={mobileMenuItemClass(router.location.startsWith('/browse'))} onSelect={() => push('/browse')}>Browse</DropdownMenuItem>
       {/if}
       <DropdownMenuItem class={mobileMenuItemClass(router.location.startsWith('/library'))} onSelect={() => push('/library')}>Library</DropdownMenuItem>
+      <DropdownMenuItem class={mobileMenuItemClass(router.location.startsWith('/collections'))} onSelect={() => push('/collections')}>Collections</DropdownMenuItem>
       <DropdownMenuItem class={mobileMenuItemClass(router.location === '/activity')} onSelect={() => push('/activity')}>
         Activity{#if activeCount > 0}
           <span class="ml-[0.3rem] inline-block rounded-full bg-brand-soft px-[0.4rem] py-[0.15rem] text-[0.68rem] leading-none font-bold text-surface-2">

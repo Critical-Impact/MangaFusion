@@ -67,3 +67,27 @@ public enum DownloadStatus
     Failed,
     Cancelled,
 }
+
+/// <summary>How a <see cref="Collection"/>'s members are ordered on its page. <see cref="Manual"/>
+/// honours each member's stored position; the rest are computed from series metadata at query time.</summary>
+public enum MemberSort
+{
+    Manual = 0,
+    TitleAsc,
+    TitleDesc,
+    RecentlyAdded,
+    Year,
+}
+
+/// <summary>Which members of a <see cref="Collection"/> surface on the Home dashboard rail. A filter
+/// that hides every member also hides the rail (an empty rail doesn't render). Kept as an enum so more
+/// filters can be added later without another migration.</summary>
+public enum CollectionDashboardFilter
+{
+    /// <summary>Every member shows.</summary>
+    All = 0,
+
+    /// <summary>Only members with at least one downloaded chapter the current user hasn't finished
+    /// reading — the dashboard is a read-now surface, so a fully-read or undownloaded series is noise.</summary>
+    Unread = 1,
+}

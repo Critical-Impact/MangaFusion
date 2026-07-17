@@ -10,6 +10,7 @@
   import { notify } from '../lib/notify'
   import { languagesState, ensureLanguagesLoaded, languageName } from '../lib/languages.svelte'
   import { homeScope, setHomeAcrossLibraries, brandName } from '../lib/mode.svelte'
+  import DashboardSettings from '../lib/DashboardSettings.svelte'
 
   ensureLanguagesLoaded()
 
@@ -212,6 +213,15 @@
         Applies to Continue reading, Recently downloaded and Recently updated. By default these follow the
         library you're in, so {brandName()} only shows you {brandName() === 'ComicFusion' ? 'comics' : 'manga'}.
       </span>
+
+      <div class="mt-3 flex flex-col gap-[0.4rem]">
+        <span class="text-[0.8rem] text-text-dim">Dashboard layout</span>
+        <DashboardSettings />
+        <span class="muted text-[0.75rem]">
+          Show or hide each rail and collection, and drag the order with the arrows. Collections are
+          scoped to {brandName()}.
+        </span>
+      </div>
     </div>
   </div>
 </section>

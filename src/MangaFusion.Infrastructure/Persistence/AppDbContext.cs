@@ -30,6 +30,8 @@ public class AppDbContext : IdentityDbContext<ApplicationUser, ApplicationRole, 
     public DbSet<ArtifactChapter> ArtifactChapters => Set<ArtifactChapter>();
     public DbSet<Download> Downloads => Set<Download>();
     public DbSet<Follow> Follows => Set<Follow>();
+    public DbSet<Collection> Collections => Set<Collection>();
+    public DbSet<CollectionItem> CollectionItems => Set<CollectionItem>();
     public DbSet<ReadingProgress> ReadingProgress => Set<ReadingProgress>();
     public DbSet<SeriesReadingEntry> SeriesReadingEntries => Set<SeriesReadingEntry>();
     public DbSet<Notification> Notifications => Set<Notification>();

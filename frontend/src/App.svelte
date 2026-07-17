@@ -5,6 +5,7 @@
   import { startSignalR } from './lib/signalr.svelte'
   import { syncFromSession } from './lib/theme.svelte'
   import { modeState, syncFromSession as syncModeFromSession } from './lib/mode.svelte'
+  import { syncFromSession as syncDashboardFromSession } from './lib/dashboard.svelte'
   import { Toaster } from './lib/components/ui/sonner/index.js'
   import { TooltipProvider } from './lib/components/ui/tooltip/index.js'
   import Login from './lib/Login.svelte'
@@ -16,6 +17,8 @@
   import AuthorPage from './routes/AuthorPage.svelte'
   import Library from './routes/Library.svelte'
   import LibrarySeries from './routes/LibrarySeries.svelte'
+  import Collections from './routes/Collections.svelte'
+  import CollectionDetail from './routes/CollectionDetail.svelte'
   import Activity from './routes/Activity.svelte'
   import SourceSettings from './routes/SourceSettings.svelte'
   import Reader from './routes/Reader.svelte'
@@ -30,6 +33,8 @@
     '/author/:sourceId/:authorId': AuthorPage,
     '/library': Library,
     '/library/:id': LibrarySeries,
+    '/collections': Collections,
+    '/collections/:id': CollectionDetail,
     '/read/:chapterId': Reader,
     '/preview/:sourceId/:chapterId': Reader,
     '/activity': Activity,
@@ -57,6 +62,7 @@
       prefsSynced = true
       syncFromSession(session.me.theme)
       syncModeFromSession(session.me.preferredKind, session.me.homeAcrossLibraries)
+      syncDashboardFromSession(session.me.dashboardLayout)
     }
   })
 </script>

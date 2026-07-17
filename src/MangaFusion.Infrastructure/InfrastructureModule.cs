@@ -46,6 +46,8 @@ public class InfrastructureModule : Module
         builder.RegisterType<ChapterImporter>().AsSelf().InstancePerLifetimeScope();
         builder.RegisterType<ChapterFileImporter>().AsSelf().InstancePerLifetimeScope();
         builder.RegisterType<LibraryService>().As<ILibraryService>().InstancePerLifetimeScope();
+        builder.RegisterType<CollectionCoverComposer>().AsSelf().SingleInstance();
+        builder.RegisterType<CollectionService>().As<ICollectionService>().InstancePerLifetimeScope();
         builder.RegisterType<LocalImportService>().As<ILocalLibraryService>().InstancePerLifetimeScope();
 
         builder.RegisterType<MigrationPaths>().AsSelf().SingleInstance();

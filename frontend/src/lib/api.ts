@@ -24,6 +24,16 @@ export interface Me {
   preferredKind: string | null
   /** When true, the Home rails span both libraries instead of the one you're in. */
   homeAcrossLibraries: boolean
+  /** The user's saved Home dashboard layout, or null to use the default rail set. */
+  dashboardLayout: DashboardItem[] | null
+}
+
+/** One entry in the Home dashboard layout: a built-in rail (by fixed id) or a collection (by GUID),
+ * with a visibility flag. Order in the array is the display order. */
+export interface DashboardItem {
+  type: 'rail' | 'collection'
+  key: string
+  visible: boolean
 }
 
 export interface LanguageOption {
@@ -918,6 +928,97 @@ export const markNotificationsRead = (ids: string[]) =>
 // notification read too.
 export const markAllNotificationsRead = () =>
   send<void>(`/api/notifications/read-all?kind=${currentKind()}`, 'POST', {})
+
+// --- Collections -----------------------------------------------------------------------------
+// Per-user, kind-scoped groupings of library series. Scoped by the active kind the same way the
+// library is — a request that forgets ?kind= would return the other library's collections.
+
+export interface Collection {
+  id: string
+  kind: string
+  name: string
+  description: string | null
+  /** MemberSort enum name — see MEMBER_SORTS. */
+  memberSort: string
+  /** CollectionDashboardFilter enum name — see DASHBOARD_FILTERS. */
+  dashboardFilter: string
+  /** Cover endpoint URL (with a version stamp so it refetches after changes), or null if none yet. */
+  coverUrl: string | null
+  itemCount: number
+  updatedAt: string
+}
+
+export interface CollectionMember {
+  seriesId: string
+  title: string
+  coverUrl: string | null
+}
+
+export interface CollectionDetail extends Collection {
+  coverIsCustom: boolean
+  members: CollectionMember[]
+}
+
+/** Selectable member-sort options — value is the server enum name, label is user-facing. */
+export const MEMBER_SORTS = [
+  { v: 'Manual', l: 'Manual order' },
+  { v: 'TitleAsc', l: 'Title (A–Z)' },
+  { v: 'TitleDesc', l: 'Title (Z–A)' },
+  { v: 'RecentlyAdded', l: 'Recently added' },
+  { v: 'Year', l: 'Year (newest)' },
+] as const
+
+/** Which members surface on the dashboard rail — value is the server enum name. */
+export const DASHBOARD_FILTERS = [
+  { v: 'All', l: 'All members' },
+  { v: 'Unread', l: 'Only unread & downloaded' },
+] as const
+
+export const getCollections = () => getJson<Collection[]>(`/api/collections?kind=${currentKind()}`)
+
+/** Fetch a collection. Pass `forDashboard` to apply its dashboard filter to the returned members. */
+export const getCollection = (id: string, forDashboard = false) =>
+  getJson<CollectionDetail>(`/api/collections/${id}${forDashboard ? '?dashboard=true' : ''}`)
+
+export const createCollection = (name: string, description?: string | null) =>
+  send<Collection>(`/api/collections?kind=${currentKind()}`, 'POST', { name, description: description ?? null })
+
+export const updateCollection = (
+  id: string,
+  name: string,
+  description: string | null,
+  memberSort: string,
+  dashboardFilter: string,
+) => send<void>(`/api/collections/${id}`, 'PUT', { name, description, memberSort, dashboardFilter })
+
+export const deleteCollection = (id: string) => send<void>(`/api/collections/${id}`, 'DELETE')
+
+export const addSeriesToCollection = (id: string, seriesId: string) =>
+  send<void>(`/api/collections/${id}/series/${seriesId}`, 'POST')
+
+export const removeSeriesFromCollection = (id: string, seriesId: string) =>
+  send<void>(`/api/collections/${id}/series/${seriesId}`, 'DELETE')
+
+export const reorderCollection = (id: string, seriesIds: string[]) =>
+  send<void>(`/api/collections/${id}/order`, 'PUT', { seriesIds })
+
+/** Which of the user's collections (ids) contain the given series — drives the add-to-collection ticks. */
+export const getCollectionMembership = (seriesId: string) =>
+  getJson<string[]>(`/api/collections/membership/${seriesId}`)
+
+export const clearCollectionCover = (id: string) => send<void>(`/api/collections/${id}/cover`, 'DELETE')
+
+/** Uploads a custom cover. Multipart, so it bypasses `send()`/jsonHeaders — the browser sets the
+ * multipart boundary itself, which it can't do if we force a Content-Type. */
+export async function uploadCollectionCover(id: string, file: File): Promise<void> {
+  const form = new FormData()
+  form.append('file', file)
+  const res = await fetch(`/api/collections/${id}/cover`, { method: 'POST', credentials: 'include', body: form })
+  if (!res.ok) throw new Error(await extractError(res))
+}
+
+export const setDashboardLayout = (items: DashboardItem[]) =>
+  send<void>('/api/me/dashboard', 'PUT', { items })
 
 // --- Error helper ----------------------------------------------------------------------------
 

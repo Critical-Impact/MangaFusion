@@ -31,6 +31,7 @@
   import { isComic } from '../lib/mode.svelte'
   import { t } from '../lib/terms.svelte'
   import Cover from '../lib/Cover.svelte'
+  import AddToCollection from '../lib/AddToCollection.svelte'
   import MultiSelectDropdown from '../lib/MultiSelectDropdown.svelte'
   import { Alert, AlertDescription } from '../lib/components/ui/alert/index.js'
   import { Button } from '../lib/components/ui/button/index.js'
@@ -446,6 +447,7 @@
                 : 'Add this series to your reading list, so it shows up in Continue Reading even before you download anything.'}
             </TooltipContent>
           </Tooltip>
+          <AddToCollection seriesId={detail.id} />
           {#if !detail.followed}
             <Tooltip>
               <TooltipTrigger>

@@ -30,4 +30,11 @@ public class ApplicationUser : IdentityUser<Guid>
     /// updated) span both libraries instead of being scoped to the one the user is currently in. Off by
     /// default, so Home matches the rest of the app — every other page shows one library at a time.</summary>
     public bool HomeAcrossLibraries { get; set; }
+
+    /// <summary>The user's Home dashboard layout as a JSON array of ordered items, each
+    /// <c>{ type: "rail" | "collection", key: string, visible: bool }</c> — built-in rail ids
+    /// ("continue-reading", "recent-downloads", "recently-updated") or a collection GUID. Null means
+    /// "use the default" (built-in rails visible in their canonical order, no collections). Stored
+    /// opaque here; the SPA owns the shape and the API only round-trips it.</summary>
+    public string? DashboardLayout { get; set; }
 }

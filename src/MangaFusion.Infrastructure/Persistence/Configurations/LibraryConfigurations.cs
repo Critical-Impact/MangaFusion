@@ -167,6 +167,37 @@ public class FollowConfiguration : IEntityTypeConfiguration<Follow>
     }
 }
 
+public class CollectionConfiguration : IEntityTypeConfiguration<Collection>
+{
+    public void Configure(EntityTypeBuilder<Collection> builder)
+    {
+        builder.ToTable("Collections");
+        builder.HasKey(x => x.Id);
+        builder.Property(x => x.Name).HasMaxLength(256).IsRequired();
+        // Collections are always listed for one user in one library at a time.
+        builder.HasIndex(x => new { x.UserId, x.Kind });
+
+        builder.HasMany(x => x.Items).WithOne()
+            .HasForeignKey(x => x.CollectionId).OnDelete(DeleteBehavior.Cascade);
+        builder.HasOne<ApplicationUser>().WithMany()
+            .HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
+    }
+}
+
+public class CollectionItemConfiguration : IEntityTypeConfiguration<CollectionItem>
+{
+    public void Configure(EntityTypeBuilder<CollectionItem> builder)
+    {
+        builder.ToTable("CollectionItems");
+        builder.HasKey(x => x.Id);
+        // A series appears at most once per collection.
+        builder.HasIndex(x => new { x.CollectionId, x.SeriesId }).IsUnique();
+
+        builder.HasOne(x => x.Series).WithMany()
+            .HasForeignKey(x => x.SeriesId).OnDelete(DeleteBehavior.Cascade);
+    }
+}
+
 public class NotificationConfiguration : IEntityTypeConfiguration<Notification>
 {
     public void Configure(EntityTypeBuilder<Notification> builder)

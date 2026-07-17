@@ -1,4 +1,6 @@
+using System.Reflection;
 using System.Security.Claims;
+using System.Text.Json;
 using Autofac;
 using Microsoft.AspNetCore.DataProtection;
 using Autofac.Extensions.DependencyInjection;
@@ -232,8 +234,36 @@ app.MapGet("/api/me", async (ClaimsPrincipal user, AppDbContext db, Cancellation
             // Which library the SPA should open on. Rides the same session read as theme, so the mode
             // is known before the first page renders and no extra round-trip is needed.
             preferredKind = dbUser?.PreferredKind?.ToString().ToLowerInvariant(),
-            homeAcrossLibraries = dbUser?.HomeAcrossLibraries ?? false
+            homeAcrossLibraries = dbUser?.HomeAcrossLibraries ?? false,
+            // The Home dashboard layout, round-tripped as structured JSON (null = use the default).
+            dashboardLayout = dbUser?.DashboardLayout is null
+                ? null
+                : (object?)JsonSerializer.Deserialize<JsonElement>(dbUser.DashboardLayout)
         });
+    })
+    .RequireAuthorization();
+
+app.MapPut("/api/me/dashboard", async (
+        DashboardRequest request, ClaimsPrincipal user, AppDbContext db, CancellationToken ct) =>
+    {
+        var items = request.Items ?? [];
+        foreach (var item in items)
+        {
+            if (item.Type is not ("rail" or "collection"))
+                return Results.BadRequest($"Unknown dashboard item type '{item.Type}'.");
+        }
+
+        var id = Guid.Parse(user.FindFirstValue(ClaimTypes.NameIdentifier)!);
+        var dbUser = await db.Users.FindAsync([id], ct);
+        if (dbUser is null) return Results.Unauthorized();
+
+        // Empty layout stores null so the SPA falls back to the default rail set. Web (camelCase)
+        // options so the stored keys match the SPA's DashboardItem shape when /api/me echoes them back.
+        dbUser.DashboardLayout = items.Count == 0
+            ? null
+            : JsonSerializer.Serialize(items, JsonSerializerOptions.Web);
+        await db.SaveChangesAsync(ct);
+        return Results.Ok();
     })
     .RequireAuthorization();
 
@@ -370,6 +400,7 @@ app.MapGet("/api/languages", () =>
 
 app.MapSourceEndpoints();
 app.MapLibraryEndpoints();
+app.MapCollectionEndpoints();
 app.MapReaderEndpoints();
 app.MapMonitoringEndpoints();
 app.MapAdminEndpoints();
@@ -406,5 +437,7 @@ public record ThemeRequest(string Theme);
 public record LanguageRequest(string? Language);
 public record ModeRequest(string Mode);
 public record HomeScopeRequest(bool AcrossLibraries);
+public record DashboardItemDto(string Type, string Key, bool Visible);
+public record DashboardRequest(List<DashboardItemDto>? Items);
 public record ChangeEmailRequest(string? Email);
 public record ChangePasswordRequest(string? CurrentPassword, string? NewPassword);

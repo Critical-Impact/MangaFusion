@@ -56,6 +56,12 @@ public sealed class LibraryPaths
     public string SeriesDirectory(MediaKind kind, string title) =>
         Path.Combine(Root(kind), Sanitize(title));
 
+    /// <summary>Directory holding a collection's cover art, under a hidden folder in the kind's root so
+    /// it never collides with a series directory. Collections are kind-scoped, so this lives under the
+    /// same per-kind root as the covers it's composed from.</summary>
+    public string CollectionDirectory(MediaKind kind, Guid collectionId) =>
+        Path.Combine(Root(kind), ".collections", collectionId.ToString("N"));
+
     /// <summary>Resolves a stored relative path (<c>Artifact.Path</c>, <c>Series.CoverPath</c>) against
     /// the root of the library it belongs to.</summary>
     public string Absolute(MediaKind kind, string relativePath) =>
