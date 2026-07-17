@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MangaFusion</title>
+    <script>
+      // Paints the last-known theme before first paint / before the app bundle loads, so
+      // there's no flash of the default theme while the session (and the account's real,
+      // DB-persisted theme) loads. lib/theme.svelte.ts's syncFromSession() overwrites this
+      // once the session resolves — this is just a fast local guess, not the source of
+      // truth. Keep the theme id list in sync with lib/theme.svelte.ts.
+      (function () {
+        var saved = localStorage.getItem('mf-theme')
+        var known = ['violet', 'seal-ink', 'jade', 'momiji']
+        document.documentElement.dataset.theme = known.indexOf(saved) !== -1 ? saved : 'violet'
+      })()
+    </script>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

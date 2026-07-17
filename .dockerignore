@@ -1,0 +1,22 @@
+# Build outputs
+**/bin
+**/obj
+**/dist
+
+# Node
+**/node_modules
+
+# Generated SPA output (rebuilt inside the image)
+src/MangaFusion.Web/wwwroot
+src/MangaFusion.Web/data
+
+# Runtime data / secrets
+data
+**/*.db
+**/*.db-shm
+**/*.db-wal
+
+# Tooling / VCS
+.git
+.idea
+**/*.user

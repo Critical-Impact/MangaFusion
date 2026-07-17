@@ -1,0 +1,21 @@
+# .NET build output
+[Bb]in/
+[Oo]bj/
+*.user
+.vs/
+
+# Node
+node_modules/
+frontend/dist/
+
+# Generated SPA output served by ASP.NET (built from frontend/)
+src/MangaFusion.Web/wwwroot/
+
+# Runtime data & secrets
+data/
+*.db
+*.db-shm
+*.db-wal
+
+# IDE
+.idea/

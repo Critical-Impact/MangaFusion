@@ -1,0 +1,380 @@
+using System.Security.Claims;
+using MangaFusion.Application.Downloads;
+using MangaFusion.Application.Library;
+using MangaFusion.Application.Reading;
+using MangaFusion.Application.Sources;
+using MangaFusion.Domain.Library;
+using MangaFusion.Infrastructure.Library;
+using MangaFusion.Web.Models;
+
+namespace MangaFusion.Web.Endpoints;
+
+/// <summary>Shared-library browsing + add-to-library + follow endpoints.</summary>
+public static class LibraryEndpoints
+{
+    public static void MapLibraryEndpoints(this IEndpointRouteBuilder app)
+    {
+        var group = app.MapGroup("/api/library").RequireAuthorization();
+
+        group.MapPost("/series", AddSeries);
+        group.MapGet("/series", ListSeries);
+        group.MapGet("/series/titles", GetTitles);
+        group.MapGet("/tags", GetTags);
+        group.MapGet("/tags/catalog", GetTagCatalog);
+        group.MapGet("/series/{id:guid}", GetSeries);
+        group.MapGet("/series/{id:guid}/cover", GetCover);
+        group.MapPost("/series/{id:guid}/follow", Follow);
+        group.MapDelete("/series/{id:guid}/follow", Unfollow);
+        group.MapPost("/series/{id:guid}/refresh-metadata", RefreshMetadata).RequireAuthorization("Admin");
+        group.MapDelete("/series/{id:guid}", DeleteSeries).RequireAuthorization("Admin");
+        group.MapDelete("/chapters/{id:guid}", DeleteChapter).RequireAuthorization("Admin");
+
+        group.MapPost("/chapters/{id:guid}/download", QueueDownload);
+        group.MapPost("/series/{id:guid}/download-missing", QueueMissing);
+        group.MapGet("/downloads", ListDownloads);
+        group.MapGet("/recent-downloads", RecentDownloads);
+        group.MapGet("/recently-updated", RecentlyUpdated);
+
+        group.MapPut("/series/{id:guid}/groups", SetGroups).RequireAuthorization("Admin");
+        group.MapPut("/series/{id:guid}/policy", SetPolicy).RequireAuthorization("Admin");
+    }
+
+    private static async Task<IResult> QueueMissing(
+        Guid id, DownloadMissingRequest? request, IDownloadService downloads, CancellationToken ct)
+    {
+        try
+        {
+            var count = await downloads.QueueSeriesMissingAsync(id, request?.Languages ?? [], ct);
+            return Results.Ok(new { queued = count });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(new { error = ex.Message });
+        }
+    }
+
+    private static async Task<IResult> SetGroups(
+        Guid id, SetGroupsRequest request, ILibraryService library, CancellationToken ct)
+    {
+        await library.SetPreferredGroupsAsync(id, request.Groups ?? [], ct);
+        return Results.NoContent();
+    }
+
+    private static async Task<IResult> SetPolicy(
+        Guid id, SetPolicyRequest request, ILibraryService library, CancellationToken ct)
+    {
+        var languages = request.Languages ?? [];
+        if (ValidateLanguages(languages) is { } error) return error;
+
+        await library.SetPolicyAsync(id, request.GracePeriodDays, request.AutoDownload, languages, ct);
+        return Results.NoContent();
+    }
+
+    private static IResult? ValidateLanguages(IEnumerable<string> languages)
+    {
+        var unknown = languages.FirstOrDefault(l => !MangaLanguage.IsKnown(l));
+        return unknown is null ? null : Results.BadRequest($"Unknown language '{unknown}'.");
+    }
+
+    private static async Task<IResult> QueueDownload(
+        Guid id, DownloadChapterRequest? request, IDownloadService downloads, CancellationToken ct)
+    {
+        try
+        {
+            var downloadId = await downloads.QueueChapterDownloadAsync(id, request?.ReleaseId, ct);
+            return Results.Ok(new { downloadId });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(new { error = ex.Message });
+        }
+    }
+
+    private static async Task<IResult> ListDownloads(IDownloadService downloads, CancellationToken ct)
+    {
+        var recent = await downloads.GetRecentAsync(ct: ct);
+        return Results.Ok(recent.Select(d => new DownloadDto(
+            d.Id, d.SeriesId, d.ChapterId, d.Description, d.Status.ToString(),
+            d.PagesDone, d.PagesTotal, d.Error, d.CreatedAt)));
+    }
+
+    private static async Task<IResult> RecentDownloads(
+        ILibraryService library, string? kind, int? limit, CancellationToken ct)
+    {
+        var take = limit is > 0 and <= 50 ? limit.Value : 12;
+        var items = await library.GetRecentDownloadsAsync(MediaKindQuery.ParseOptional(kind), take, ct);
+        return Results.Ok(items.Select(i => new
+        {
+            i.SeriesId,
+            i.SeriesTitle,
+            coverUrl = i.CoverPath is null ? null : $"/api/library/series/{i.SeriesId}/cover",
+            i.ChapterId,
+            i.Number,
+            i.Volume,
+            i.DownloadedAt,
+        }));
+    }
+
+    private static async Task<IResult> RecentlyUpdated(
+        ILibraryService library, string? kind, int? limit, CancellationToken ct)
+    {
+        var take = limit is > 0 and <= 50 ? limit.Value : 12;
+        var items = await library.GetRecentlyUpdatedAsync(MediaKindQuery.ParseOptional(kind), take, ct);
+        return Results.Ok(items.Select(i => new
+        {
+            i.SeriesId,
+            i.SeriesTitle,
+            coverUrl = i.CoverPath is null ? null : $"/api/library/series/{i.SeriesId}/cover",
+            i.ChapterId,
+            i.Number,
+            i.Volume,
+            i.UpdatedAt,
+        }));
+    }
+
+    private static Guid CurrentUser(ClaimsPrincipal user) =>
+        Guid.Parse(user.FindFirstValue(ClaimTypes.NameIdentifier)!);
+
+    private static async Task<IResult> AddSeries(
+        AddSeriesRequest request, ILibraryService library, ISourceRegistry registry, CancellationToken ct)
+    {
+        // A source with no chapter feed (MangaUpdates, ComicVine) can still seed a library entry — it
+        // just contributes metadata, with the chapters arriving later from a local import.
+        var hasChapters = registry.Get(request.SourceId).Capabilities
+            .HasFlag(Contracts.Models.SourceCapabilities.Chapters);
+
+        var id = hasChapters
+            ? await library.AddSeriesAsync(request.SourceId, request.SourceSeriesId, ct)
+            : await library.AddOrUpdateMetadataOnlyAsync(request.SourceId, request.SourceSeriesId, ct);
+
+        return Results.Ok(new { id });
+    }
+
+    /// <summary><paramref name="tags"/> carries the tag filters: one repetition per facet, each a
+    /// comma-separated id list — <c>?tags=a,b&amp;tags=c</c> means "(a OR b) AND c". Which facets exist is
+    /// the caller's business (genre/theme for manga, publisher/character/concept for comics); filtering
+    /// only needs the ids.</summary>
+    private static async Task<IResult> ListSeries(
+        ClaimsPrincipal user, ILibraryService library, CancellationToken ct,
+        string? kind, string? q, string[]? tags, string? rating, string? sort, string? order,
+        int? limit, int? offset, string? authorSourceId, string? authorId, string? sourceId)
+    {
+        var userId = CurrentUser(user);
+        var query = new LibraryQuery(
+            MediaKindQuery.Parse(kind),
+            q,
+            ParseTagFacets(tags),
+            ParseRating(rating),
+            sort?.ToLowerInvariant() is "added" or "year" or "chapters" ? sort.ToLowerInvariant() : "title",
+            order?.ToLowerInvariant() == "desc" ? "desc" : "asc",
+            Math.Clamp(limit ?? 24, 1, 100),
+            Math.Max(0, offset ?? 0),
+            AuthorSourceId: authorSourceId,
+            AuthorNativeId: authorId,
+            SourceId: sourceId);
+
+        var result = await library.QueryLibraryAsync(query, ct);
+
+        // One query for the whole page, not one per row.
+        var followed = await library.GetFollowedSeriesIdsAsync(
+            userId, result.Items.Select(s => s.Id).ToList(), ct);
+
+        var dtos = result.Items
+            .Select(s => new LibrarySeriesDto(
+                s.Id, s.Title, CoverUrl(s.Id, s.CoverPath), followed.Contains(s.Id), s.Tags, s.Year, s.AddedAt,
+                s.ChapterCount, s.Sources))
+            .ToList();
+
+        return Results.Ok(new PagedDto<LibrarySeriesDto>(dtos, result.Total, query.Limit, query.Offset));
+    }
+
+    private static async Task<IResult> RefreshMetadata(Guid id, ILibraryService library, CancellationToken ct)
+    {
+        try
+        {
+            await library.RefreshMetadataAsync(id, ct);
+            return Results.NoContent();
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(new { error = ex.Message });
+        }
+    }
+
+    private static async Task<IResult> DeleteSeries(Guid id, ILibraryService library, CancellationToken ct)
+    {
+        try
+        {
+            await library.DeleteSeriesAsync(id, ct);
+            return Results.NoContent();
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(new { error = ex.Message });
+        }
+    }
+
+    private static async Task<IResult> DeleteChapter(Guid id, ILibraryService library, CancellationToken ct)
+    {
+        try
+        {
+            await library.DeleteChapterAsync(id, ct);
+            return Results.NoContent();
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(new { error = ex.Message });
+        }
+    }
+
+    private static IReadOnlyList<IReadOnlyList<Guid>> ParseTagFacets(string[]? tags) =>
+        (tags ?? [])
+            .Select(facet => (IReadOnlyList<Guid>)facet
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Select(id => Guid.TryParse(id, out var parsed) ? parsed : (Guid?)null)
+                .Where(id => id is not null)
+                .Select(id => id!.Value)
+                .ToList())
+            .Where(facet => facet.Count > 0)
+            .ToList();
+
+    private static ContentRating? ParseRating(string? value) =>
+        Enum.TryParse<ContentRating>(value, ignoreCase: true, out var parsed) ? parsed : null;
+
+    private static async Task<IResult> GetTags(
+        ILibraryService library, string? kind, string? group, CancellationToken ct) =>
+        Results.Ok(await library.GetLibraryTagsAsync(MediaKindQuery.Parse(kind), group, ct));
+
+    private static async Task<IResult> GetTagCatalog(
+        ILibraryService library, string? kind, CancellationToken ct) =>
+        Results.Ok(await library.GetTagCatalogAsync(MediaKindQuery.Parse(kind), ct));
+
+    private static async Task<IResult> GetTitles(ILibraryService library, CancellationToken ct) =>
+        Results.Ok((await library.GetLibraryTitlesAsync(ct)).Select(s => new LibraryTitleDto(s.Id, s.Title)));
+
+    private static async Task<IResult> GetSeries(
+        Guid id, ClaimsPrincipal user, ILibraryService library, IReaderService reader,
+        ISourceRegistry registry, CancellationToken ct)
+    {
+        var series = await library.GetSeriesAsync(id, ct);
+        if (series is null)
+        {
+            return Results.NotFound();
+        }
+
+        var userId = CurrentUser(user);
+        var progress = await library.GetProgressAsync(userId, id, ct);
+        var follow = await library.GetFollowAsync(userId, id, ct);
+        var reading = await reader.IsReadingAsync(userId, id, ct);
+
+        return Results.Ok(ToDetail(series, progress, follow, reading, registry));
+    }
+
+    private static async Task GetCover(
+        Guid id, ILibraryService library, HttpContext http, CancellationToken ct)
+    {
+        var file = await library.GetCoverFileAsync(id, ct);
+        if (file is null || !File.Exists(file))
+        {
+            http.Response.StatusCode = StatusCodes.Status404NotFound;
+            return;
+        }
+
+        http.Response.ContentType = "image/jpeg";
+        http.Response.Headers.CacheControl = "public, max-age=86400";
+        await http.Response.SendFileAsync(file, ct);
+    }
+
+    private static async Task<IResult> Follow(
+        Guid id, FollowRequest request, ClaimsPrincipal user, ILibraryService library, CancellationToken ct)
+    {
+        var languages = request.Languages ?? [];
+        if (ValidateLanguages(languages) is { } error) return error;
+
+        var follow = await library.FollowAsync(CurrentUser(user), id, languages, request.AutoDownload, ct);
+        return Results.Ok(new { follow.Id, follow.Languages, follow.AutoDownload });
+    }
+
+    private static async Task<IResult> Unfollow(
+        Guid id, ClaimsPrincipal user, ILibraryService library, CancellationToken ct)
+    {
+        await library.UnfollowAsync(CurrentUser(user), id, ct);
+        return Results.NoContent();
+    }
+
+    private static string? CoverUrl(Guid id, string? coverPath) =>
+        coverPath is null ? null : $"/api/library/series/{id}/cover";
+
+    private static LibrarySeriesDetailDto ToDetail(
+        Series series, IReadOnlyDictionary<Guid, ReadingProgress> progress, Follow? follow, bool reading,
+        ISourceRegistry registry)
+    {
+        var link = series.SourceLinks.FirstOrDefault(l => l.IsMetadataPrimary)
+                   ?? series.SourceLinks.FirstOrDefault();
+
+        // Friendly source name for display (e.g. "WitchScans"); falls back to the id, then null.
+        var sourceName = link?.SourceId is { } sourceId
+            ? registry.Contains(sourceId) ? registry.Get(sourceId).DisplayName : sourceId
+            : null;
+
+        var chapters = series.Chapters
+            .OrderBy(c => c.Language)
+            .ThenBy(c => c.NumberSort ?? decimal.MaxValue)
+            .ThenBy(c => c.NumberKey)
+            .Select(c => ToChapter(c, progress))
+            .ToList();
+
+        return new LibrarySeriesDetailDto(
+            series.Id,
+            series.Title,
+            series.AltTitles,
+            series.Description,
+            CoverUrl(series.Id, series.CoverPath),
+            series.Authors.Select(a => new AuthorRefDto(a.SourceId, a.SourceAuthorId, a.Name)).ToList(),
+            series.Tags.Select(t => new TagInfo(t.Id, t.Name, t.Group, t.SourceId, t.SourceTagId)).ToList(),
+            series.ContentRating.ToString(),
+            series.Status.ToString(),
+            series.Year,
+            series.PreferredGroups,
+            series.AutoDownload,
+            series.GracePeriodDays,
+            series.Languages,
+            series.LastScannedAt,
+            link?.SourceId,
+            sourceName,
+            link?.SourceSeriesId,
+            follow is not null,
+            follow?.AutoDownload ?? false,
+            follow?.Languages ?? [],
+            reading,
+            chapters);
+    }
+
+    private static LibraryChapterDto ToChapter(Chapter c, IReadOnlyDictionary<Guid, ReadingProgress> progress)
+    {
+        progress.TryGetValue(c.Id, out var p);
+        var activeRelease = c.ActiveRelease ?? c.Releases.FirstOrDefault(r => r.Id == c.ActiveReleaseId);
+        var activeGroup = activeRelease?.GroupKey;
+
+        // Chapter date = the active release's publish date, else the most recent release's.
+        var publishedAt = activeRelease?.PublishedAt
+            ?? c.Releases.OrderByDescending(r => r.PublishedAt).FirstOrDefault()?.PublishedAt;
+
+        return new LibraryChapterDto(
+            c.Id,
+            c.Language,
+            c.Number,
+            c.NumberSort,
+            c.Volume,
+            c.Title,
+            c.ActiveArtifactId is not null,
+            activeGroup,
+            p?.PageIndex ?? 0,
+            p?.Completed ?? false,
+            publishedAt,
+            c.Releases
+                .OrderByDescending(r => r.PublishedAt)
+                .Select(r => new ReleaseDto(r.Id, r.ScanlationGroups, r.GroupKey, r.IsExternal, r.PublishedAt, r.PageCount))
+                .ToList());
+    }
+}

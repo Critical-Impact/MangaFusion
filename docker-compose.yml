@@ -1,0 +1,40 @@
+services:
+  app:
+    build: .
+    image: mangafusion:latest
+    ports:
+      - "8080:8080"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      # Initial admin credentials, applied only on first run (empty DB). Change after login.
+      Seed__AdminEmail: ${MF_ADMIN_EMAIL:-admin@mangafusion.local}
+      Seed__AdminPassword: ${MF_ADMIN_PASSWORD:-ChangeMe!123}
+      # Default SQLite store. For Postgres (M6), enable the `db` service below and set e.g.
+      #   ConnectionStrings__Default: "Host=db;Database=mangafusion;Username=mangafusion;Password=${MF_DB_PASSWORD}"
+      ConnectionStrings__Default: "Data Source=data/mangafusion.db"
+      # Puts the library on its own volume, away from the DB. Manga and comics are separate libraries and
+      # land in /app/library/manga and /app/library/comics. To split them across different volumes, set
+      # Library__MangaRootPath / Library__ComicRootPath instead and mount each.
+      Library__RootPath: /app/library
+    volumes:
+      - mf-data:/app/data        # SQLite DB, Data Protection keys, ingest inboxes
+      - mf-library:/app/library  # the manga + comic libraries
+    mem_limit: 1g
+    restart: unless-stopped
+
+  # Optional Postgres backend, validated in M6. Enable with:  docker compose --profile postgres up
+  db:
+    image: postgres:17-alpine
+    profiles: ["postgres"]
+    environment:
+      POSTGRES_DB: mangafusion
+      POSTGRES_USER: mangafusion
+      POSTGRES_PASSWORD: ${MF_DB_PASSWORD:-mangafusion}
+    volumes:
+      - mf-pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+
+volumes:
+  mf-data:
+  mf-library:
+  mf-pgdata:

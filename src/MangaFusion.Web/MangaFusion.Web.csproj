@@ -1,0 +1,43 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <ItemGroup>
+    <ProjectReference Include="..\MangaFusion.Application\MangaFusion.Application.csproj" />
+    <ProjectReference Include="..\MangaFusion.Infrastructure\MangaFusion.Infrastructure.csproj" />
+    <ProjectReference Include="..\MangaFusion.Contracts\MangaFusion.Contracts.csproj" />
+    <ProjectReference Include="..\MangaFusion.Sources.MangaDex\MangaFusion.Sources.MangaDex.csproj" />
+    <ProjectReference Include="..\MangaFusion.Sources.ComicVine\MangaFusion.Sources.ComicVine.csproj" />
+    <ProjectReference Include="..\MangaFusion.Sources.MangaUpdates\MangaFusion.Sources.MangaUpdates.csproj" />
+    <ProjectReference Include="..\MangaFusion.Sources.Web\MangaFusion.Sources.Web.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Autofac" />
+    <PackageReference Include="Autofac.Extensions.DependencyInjection" />
+    <PackageReference Include="Hangfire.AspNetCore" />
+    <PackageReference Include="Hangfire.Storage.SQLite" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" />
+    <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+  </PropertyGroup>
+
+  <!-- No MSBuild property alias exists for System.GC.ConserveMemory, so it's set directly as a
+       RuntimeHostConfigurationOption (same mechanism ServerGarbageCollection above expands to).
+       9 = most aggressive: the GC favors returning committed memory to the OS over throughput. -->
+  <ItemGroup>
+    <RuntimeHostConfigurationOption Include="System.GC.ConserveMemory" Value="9" />
+  </ItemGroup>
+
+</Project>

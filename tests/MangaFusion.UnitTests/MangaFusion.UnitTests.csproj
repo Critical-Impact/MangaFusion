@@ -1,0 +1,32 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="SixLabors.ImageSharp" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\MangaFusion.Domain\MangaFusion.Domain.csproj" />
+    <ProjectReference Include="..\..\src\MangaFusion.Contracts\MangaFusion.Contracts.csproj" />
+    <ProjectReference Include="..\..\src\MangaFusion.Application\MangaFusion.Application.csproj" />
+    <ProjectReference Include="..\..\src\MangaFusion.Infrastructure\MangaFusion.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\MangaFusion.Sources.MangaDex\MangaFusion.Sources.MangaDex.csproj" />
+    <ProjectReference Include="..\..\src\MangaFusion.Sources.ComicVine\MangaFusion.Sources.ComicVine.csproj" />
+    <ProjectReference Include="..\..\src\MangaFusion.Sources.Web\MangaFusion.Sources.Web.csproj" />
+  </ItemGroup>
+
+</Project>

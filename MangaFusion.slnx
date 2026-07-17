@@ -1,0 +1,17 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/MangaFusion.Application/MangaFusion.Application.csproj" />
+    <Project Path="src/MangaFusion.Contracts/MangaFusion.Contracts.csproj" />
+    <Project Path="src/MangaFusion.Domain/MangaFusion.Domain.csproj" />
+    <Project Path="src/MangaFusion.Infrastructure/MangaFusion.Infrastructure.csproj" />
+    <Project Path="src/MangaFusion.Sources.MangaDex/MangaFusion.Sources.MangaDex.csproj" />
+    <Project Path="src/MangaFusion.Sources.ComicVine/MangaFusion.Sources.ComicVine.csproj" />
+    <Project Path="src/MangaFusion.Sources.MangaUpdates/MangaFusion.Sources.MangaUpdates.csproj" />
+    <Project Path="src/MangaFusion.Sources.Web/MangaFusion.Sources.Web.csproj" />
+    <Project Path="src/MangaFusion.Web/MangaFusion.Web.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/MangaFusion.IntegrationTests/MangaFusion.IntegrationTests.csproj" />
+    <Project Path="tests/MangaFusion.UnitTests/MangaFusion.UnitTests.csproj" />
+  </Folder>
+</Solution>

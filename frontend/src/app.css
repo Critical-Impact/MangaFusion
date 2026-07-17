@@ -1,0 +1,252 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+/*
+ * Theming: only the "brand identity" tokens (surfaces, borders, text neutrals, and
+ * the three accent tokens) vary per theme — see the `:root[data-theme="..."]` blocks
+ * below. Status colors (ok/err/warn/info/etc.), shape, spacing, and --sans are
+ * theme-invariant: they read consistently regardless of which brand accent is active,
+ * the same way most multi-theme apps keep semantic colors fixed while only the brand
+ * hue shifts. `data-theme` is set on <html> by `lib/theme.svelte.ts` (persisted to
+ * localStorage) and, before that JS runs, by a synchronous inline script in
+ * index.html that prevents a flash of the wrong theme on load.
+ */
+:root {
+  --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
+
+  /* status (theme-invariant) */
+  --ok: #86e0a8;
+  --ok-border: #3a6a4a;
+  --err: #fb7185;
+  --err-soft: #f28b8b;
+  --warn: #e0c586;
+  --info: #7bd3f0;
+  --external: #f0b070;
+  --danger-border: #5a2a35;
+  --chip-border: #3a3a46;
+
+  /* shape */
+  --r-sm: 6px;
+  --r: 8px;
+  --r-md: 10px;
+  --r-lg: 12px;
+  --r-pill: 999px;
+
+  /* spacing */
+  --poster-pad: 0.3rem;
+
+  color-scheme: dark;
+}
+
+/* Violet — the original/default theme. Also the fallback before data-theme is set. */
+:root,
+:root[data-theme='violet'] {
+  --bg: #121218;
+  --bg-reader: #0c0c10;
+  --surface: #1b1b22;
+  --surface-2: #16161d;
+  --surface-3: #22222b;
+  --border: #2a2a35;
+  --border-dim: #23232c;
+  --border-strong: #33333f;
+  --border-accent: #a78bfa;
+  --text: #f5f5f7;
+  --text-2: #e5e5ea;
+  --text-dim: #c7c7d1;
+  --text-mute: #8a8a99;
+  --text-faint: #55555f;
+  --accent: #7c3aed;
+  --accent-2: #db2777;
+  --accent-soft: #a78bfa;
+}
+
+/* Seal Ink — sumi-ink ground, hanko-stamp vermillion accent. */
+:root[data-theme='seal-ink'] {
+  --bg: #14100f;
+  --bg-reader: #0d0a09;
+  --surface: #1e1815;
+  --surface-2: #191411;
+  --surface-3: #2a221d;
+  --border: #332821;
+  --border-dim: #2a211b;
+  --border-strong: #3d2f26;
+  --border-accent: #e08a5c;
+  --text: #f3ede4;
+  --text-2: #e5dcd0;
+  --text-dim: #c9bcac;
+  --text-mute: #94897b;
+  --text-faint: #6b5f52;
+  --accent: #b7472a;
+  --accent-2: #d97b3f;
+  --accent-soft: #e08a5c;
+}
+
+/* Jade Screentone — graphite ground, jade accent. Cooler, print-room feel. */
+:root[data-theme='jade'] {
+  --bg: #131515;
+  --bg-reader: #0e0f0f;
+  --surface: #1c1f1f;
+  --surface-2: #171919;
+  --surface-3: #262a2a;
+  --border: #303534;
+  --border-dim: #262b2a;
+  --border-strong: #3a3f3e;
+  --border-accent: #5fc09a;
+  --text: #eef1ef;
+  --text-2: #dde2df;
+  --text-dim: #b9c1bd;
+  --text-mute: #838d88;
+  --text-faint: #5c655f;
+  --accent: #2f9e78;
+  --accent-2: #6fc9a8;
+  --accent-soft: #5fc09a;
+}
+
+/* Momiji — warm amber ground, marigold accent. Autumn maple, the coziest of the four. */
+:root[data-theme='momiji'] {
+  --bg: #15130f;
+  --bg-reader: #100e0b;
+  --surface: #201c16;
+  --surface-2: #1a1712;
+  --surface-3: #2b251c;
+  --border: #362e22;
+  --border-dim: #2b251c;
+  --border-strong: #40361f;
+  --border-accent: #d9a355;
+  --text: #f5efe3;
+  --text-2: #e6dcc8;
+  --text-dim: #c9bb9d;
+  --text-mute: #96876c;
+  --text-faint: #6e6250;
+  --accent: #c8862c;
+  --accent-2: #5f7a3d;
+  --accent-soft: #d9a355;
+}
+
+/*
+ * Tailwind v4 / shadcn-svelte theme wiring.
+ *
+ * This app is dark-only (see `color-scheme: dark` above) — all four themes above are
+ * dark, there's no light-mode `:root` split, `data-theme` just picks which dark
+ * palette's variables win.
+ *
+ * shadcn-svelte's own components use `bg-accent`/`text-accent-foreground` purely as
+ * a hover/highlight slot (DropdownMenu, Popover, Command row-hover) — that is NOT
+ * this app's brand purple (`--accent` above). --color-accent is deliberately mapped
+ * to --surface-3 here, not --accent, so shadcn primitives don't get silently
+ * reskinned in brand purple where the original design never did that.
+ */
+@theme inline {
+  --color-background: var(--bg);
+  --color-foreground: var(--text);
+  --color-card: var(--surface);
+  --color-card-foreground: var(--text);
+  --color-popover: var(--surface-2);
+  --color-popover-foreground: var(--text);
+  --color-primary: var(--accent);
+  --color-primary-foreground: #ffffff;
+  --color-secondary: var(--surface-3);
+  --color-secondary-foreground: var(--text);
+  --color-muted: var(--surface-2);
+  --color-muted-foreground: var(--text-mute);
+  --color-accent: var(--surface-3);
+  --color-accent-foreground: var(--text);
+  --color-destructive: var(--err);
+  --color-destructive-foreground: #ffffff;
+  --color-border: var(--border);
+  --color-input: var(--border-strong);
+  --color-ring: var(--accent-soft);
+
+  /* app-specific tokens with no shadcn slot */
+  --color-bg-reader: var(--bg-reader);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-border-dim: var(--border-dim);
+  --color-text-2: var(--text-2);
+  --color-text-dim: var(--text-dim);
+  --color-text-mute: var(--text-mute);
+  --color-text-faint: var(--text-faint);
+  --color-brand: var(--accent);
+  --color-brand-2: var(--accent-2);
+  --color-brand-soft: var(--accent-soft);
+  --color-ok: var(--ok);
+  --color-ok-border: var(--ok-border);
+  --color-err: var(--err);
+  --color-err-soft: var(--err-soft);
+  --color-warn: var(--warn);
+  --color-info: var(--info);
+  --color-external: var(--external);
+  --color-danger-border: var(--danger-border);
+  --color-chip-border: var(--chip-border);
+
+  --radius: var(--r);
+  --radius-sm: var(--r-sm);
+  --radius-md: var(--r-md);
+  --radius-lg: var(--r-lg);
+  --radius-xl: var(--r-lg);
+  --radius-pill: var(--r-pill);
+
+  --font-sans: var(--sans);
+}
+
+/*
+ * Everything below is wrapped in Tailwind's `base` layer. Tailwind v4 emits utility
+ * classes in `@layer utilities`, and un-layered CSS always wins over layered CSS
+ * regardless of specificity — so without this wrapper, e.g. `a { color: ... }` below
+ * would silently override every `text-*` utility applied to a Tailwind-migrated link.
+ */
+@layer base {
+  * {
+    box-sizing: border-box;
+  }
+
+  body {
+    margin: 0;
+    min-height: 100vh;
+    font: 16px/1.5 var(--sans);
+    color: var(--text);
+    background: var(--bg);
+    font-synthesis: none;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  a {
+    color: var(--accent-soft);
+  }
+
+  /*
+   * Shared utility classes, kept post-migration as permanent shorthand rather than
+   * inlining their equivalent Tailwind utilities at every call site. (`.btn`/
+   * `.btn-secondary`/`.input` were the same kind of shim but ended up with zero
+   * remaining consumers once every route adopted shadcn's `Button`/`Input`/`Select`
+   * components, so they were deleted outright rather than kept around unused.)
+   */
+  .muted {
+    color: var(--text-mute);
+  }
+
+  .center {
+    min-height: 60vh;
+    display: grid;
+    place-items: center;
+  }
+
+  .error {
+    color: var(--err);
+    font-size: 0.9rem;
+  }
+
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
+  }
+
+  .poster-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 1rem;
+  }
+}

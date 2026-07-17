@@ -1,0 +1,380 @@
+<script lang="ts">
+  import { onDestroy } from 'svelte'
+  import { link } from 'svelte-spa-router'
+  import {
+    startMigrationScan,
+    getMigrationBatches,
+    getMigrationBatch,
+    setMigrationSeriesMatch,
+    setMigrationMergeTarget,
+    setMigrationItemDisposition,
+    commitMigrationSeries,
+    commitAllCleanMigrationSeries,
+    searchSeries,
+    getLibraryTitles,
+    type MigrationBatchSummary,
+    type MigrationBatchDetail,
+    type MigrationSeriesDetail,
+    type Series,
+  } from '../../lib/api'
+  import { notify } from '../../lib/notify'
+  import { Button } from '../../lib/components/ui/button/index.js'
+  import { Input } from '../../lib/components/ui/input/index.js'
+  import { Checkbox } from '../../lib/components/ui/checkbox/index.js'
+  import { Label } from '../../lib/components/ui/label/index.js'
+  import { Select, SelectTrigger, SelectContent, SelectItem } from '../../lib/components/ui/select/index.js'
+  import { Spinner } from '../../lib/components/ui/spinner/index.js'
+
+  let batches = $state<MigrationBatchSummary[]>([])
+  let batch = $state<MigrationBatchDetail | null>(null)
+  let scanning = $state(false)
+  let busy = $state<Record<string, boolean>>({})
+  let expanded = $state<Record<string, boolean>>({})
+  let showCommitted = $state(false)
+
+  // Per-series match search state, keyed by migration series id.
+  let matchQuery = $state<Record<string, string>>({})
+  let matchResults = $state<Record<string, Series[]>>({})
+  let mergeQuery = $state<Record<string, string>>({})
+  let libraryTitles = $state<{ id: string; title: string }[]>([])
+
+  let timer: ReturnType<typeof setInterval> | undefined
+
+  const msgOf = (e: unknown) => (e instanceof Error ? e.message : 'Something went wrong.')
+  const sizeOf = (b: number) => (b < 1024 ? `${b} B` : b < 1024 * 1024 ? `${(b / 1024).toFixed(0)} KB` : `${(b / 1024 / 1024).toFixed(1)} MB`)
+
+  refresh()
+
+  onDestroy(() => clearInterval(timer))
+
+  async function refresh() {
+    try {
+      batches = await getMigrationBatches()
+      if (!batch && batches.length) await openBatch(batches[0].id)
+    } catch (err) {
+      notify.error(msgOf(err))
+    }
+  }
+
+  async function scan() {
+    scanning = true
+    try {
+      const { batchId } = await startMigrationScan()
+      await openBatch(batchId)
+      watch(batchId)
+    } catch (err) {
+      notify.error(msgOf(err))
+    } finally {
+      scanning = false
+    }
+  }
+
+  async function openBatch(id: string) {
+    try {
+      batch = await getMigrationBatch(id)
+      if (batch.status === 'Scanning') watch(id)
+    } catch (err) {
+      notify.error(msgOf(err))
+    }
+  }
+
+  function watch(id: string) {
+    clearInterval(timer)
+    timer = setInterval(async () => {
+      const updated = await getMigrationBatch(id)
+      batch = updated
+      if (updated.status !== 'Scanning') {
+        clearInterval(timer)
+        batches = await getMigrationBatches()
+      }
+    }, 2500)
+  }
+
+  function toggle(seriesId: string) {
+    expanded[seriesId] = !expanded[seriesId]
+  }
+
+  async function act(key: string, fn: () => Promise<unknown>) {
+    busy[key] = true
+    try {
+      await fn()
+      if (batch) await openBatch(batch.id)
+    } catch (err) {
+      notify.error(msgOf(err))
+    } finally {
+      busy[key] = false
+    }
+  }
+
+  async function searchMatch(seriesId: string, fallback: string) {
+    const q = (matchQuery[seriesId] ?? '').trim() || fallback
+    if (!q) return
+    try {
+      const result = await searchSeries('mangadex', q, { limit: 8 })
+      matchResults[seriesId] = result.items
+    } catch (err) {
+      notify.error(msgOf(err))
+    }
+  }
+
+  async function loadLibraryTitles() {
+    if (libraryTitles.length) return
+    try {
+      libraryTitles = await getLibraryTitles()
+    } catch {
+      /* merge-target picker is best-effort */
+    }
+  }
+
+  function regimeLabel(r: string) {
+    return r === 'Live' ? 'Live' : r === 'Purged' ? 'Purged from MangaDex' : r === 'Mixed' ? 'Partially purged' : 'Unmatched'
+  }
+  function regimeClass(r: string) {
+    return r === 'Live' ? 'text-ok' : r === 'Purged' ? 'text-warn' : r === 'Mixed' ? 'text-warn' : 'text-err-soft'
+  }
+  function statusClass(s: string) {
+    return s === 'Committed' ? 'text-ok' : s === 'Failed' ? 'text-err-soft' : s === 'NeedsReview' ? 'text-warn' : ''
+  }
+
+  const dispositions = ['Import', 'Duplicate', 'Quarantine']
+  const batchLabel = (b: MigrationBatchSummary) => `${new Date(b.createdAt).toLocaleString()} · ${b.seriesCount} series · ${b.status}`
+  const currentBatchLabel = $derived.by(() => {
+    const found = batches.find((b) => b.id === batch?.id)
+    return found ? batchLabel(found) : ''
+  })
+
+  let visibleSeries = $derived(
+    batch ? batch.series.filter((s) => showCommitted || s.status !== 'Committed') : [],
+  )
+  let committedCount = $derived(batch ? batch.series.filter((s) => s.status === 'Committed').length : 0)
+  let readyCount = $derived(
+    batch
+      ? batch.series.filter((s) => s.status === 'NeedsReview' && !s.conflictReason && s.regime !== 'Unmatched').length
+      : 0,
+  )
+
+  async function commitAllClean() {
+    if (!batch) return
+    busy['commit-all'] = true
+    try {
+      const { committed } = await commitAllCleanMigrationSeries(batch.id)
+      notify.success(`Committed ${committed} series.`)
+      await openBatch(batch.id)
+    } catch (err) {
+      notify.error(msgOf(err))
+    } finally {
+      busy['commit-all'] = false
+    }
+  }
+</script>
+
+<div class="flex flex-col gap-4">
+  <section class="flex items-center gap-[0.6rem]">
+    <Button onclick={scan} disabled={scanning}>
+      {#if scanning}<Spinner />{/if}
+      {scanning ? 'Starting…' : 'Scan inbox'}
+    </Button>
+    {#if batches.length > 1}
+      <Select type="single" value={batch?.id ?? ''} onValueChange={(v) => openBatch(v)}>
+        <SelectTrigger>{currentBatchLabel}</SelectTrigger>
+        <SelectContent>
+          {#each batches as b (b.id)}<SelectItem value={b.id} label={batchLabel(b)}>{batchLabel(b)}</SelectItem>{/each}
+        </SelectContent>
+      </Select>
+    {/if}
+    {#if committedCount > 0}
+      <div class="flex items-center gap-[0.4rem] text-[0.8rem] text-text-dim">
+        <Checkbox id="show-committed" bind:checked={showCommitted} />
+        <Label for="show-committed" class="cursor-pointer">Show committed ({committedCount})</Label>
+      </div>
+    {/if}
+  </section>
+
+  {#if !batch}
+    <p class="text-[0.85rem] text-text-mute">No migration batches yet. Drop series folders into the configured inbox, then scan.</p>
+  {:else}
+    <p class="flex items-center gap-1.5 text-[0.85rem] text-text-mute">
+      {#if batch.status === 'Scanning'}<Spinner />{/if}
+      Batch {new Date(batch.createdAt).toLocaleString()} — <strong class={statusClass(batch.status)}>{batch.status}</strong>
+      {#if batch.status === 'Scanning'}(matching against MangaDex…){/if}
+      {#if batch.error}<span class="text-err-soft"> — {batch.error}</span>{/if}
+    </p>
+
+    {#if batch.divertedFolders.length > 0}
+      <p class="m-0 text-[0.85rem] text-warn">
+        {batch.divertedFolders.length} folder{batch.divertedFolders.length === 1 ? '' : 's'} had no ComicInfo.xml in
+        any file (not from the old MangaDex downloader) and{batch.divertedFolders.length === 1 ? ' was' : ' were'}
+        moved to the <a class="underline" href="/admin/import" use:link>Import</a> inbox instead:
+        {batch.divertedFolders.join(', ')}
+      </p>
+    {/if}
+
+    {#if readyCount > 0}
+      <Button variant="secondary" onclick={commitAllClean} disabled={busy['commit-all']}>
+        {#if busy['commit-all']}<Spinner />{/if}
+        {busy['commit-all'] ? 'Committing…' : `Commit all clean matches (${readyCount})`}
+      </Button>
+    {/if}
+
+    {#if batch.series.length === 0 && batch.status !== 'Scanning'}
+      <p class="text-[0.85rem] text-text-mute">No series folders found in the inbox.</p>
+    {:else if visibleSeries.length === 0}
+      <p class="text-[0.85rem] text-text-mute">All series in this batch are committed. Toggle "Show committed" above to see them.</p>
+    {/if}
+
+    <ul class="m-0 flex list-none flex-col gap-2 p-0">
+      {#each visibleSeries as s (s.id)}
+        <li class="overflow-hidden rounded-[var(--r-md)] border border-border">
+          <button
+            class="flex w-full items-center gap-[0.6rem] border-0 bg-[#1c1c24] px-[0.9rem] py-[0.6rem] text-left [font:inherit] text-foreground"
+            onclick={() => toggle(s.id)}
+          >
+            <span class="min-w-[10rem] text-[0.75rem] text-text-mute">{s.folderName}</span>
+            <span class="flex-1 font-semibold">{s.matchedTitle ?? s.comicInfoSeriesTitle ?? '—'}</span>
+            <span class="rounded-[var(--r-pill)] border border-current px-[0.5rem] py-[0.1rem] text-[0.72rem] {regimeClass(s.regime)}">
+              {regimeLabel(s.regime)}
+            </span>
+            {#if s.regime !== 'Unmatched'}<span class="text-[0.75rem] text-text-mute">{Math.round(s.confidence * 100)}%</span>{/if}
+            <span class="rounded-[var(--r-pill)] border border-current px-[0.5rem] py-[0.1rem] text-[0.72rem] {statusClass(s.status)}">
+              {s.status}
+            </span>
+          </button>
+
+          {#if expanded[s.id]}
+            <div class="flex flex-col gap-[0.7rem] border-t border-border-dim px-[0.9rem] py-[0.8rem]">
+              {#if s.conflictReason}<p class="m-0 text-[0.85rem] text-warn">{s.conflictReason}</p>{/if}
+              {#if s.committedLibrarySeriesId}
+                <a class="text-[0.8rem] text-brand-soft no-underline" href={`/library/${s.committedLibrarySeriesId}`} use:link>
+                  Open in library ↗
+                </a>
+              {/if}
+
+              {#if s.status !== 'Committed'}
+                <div class="flex flex-wrap gap-[1.2rem]">
+                  <label class="flex min-w-[16rem] flex-1 flex-col gap-[0.3rem] text-[0.78rem] text-text-dim">
+                    Match on MangaDex
+                    <div class="flex gap-[0.4rem]">
+                      <Input
+                        placeholder={s.comicInfoSeriesTitle ?? s.folderName}
+                        bind:value={matchQuery[s.id]}
+                        onkeydown={(e) => e.key === 'Enter' && searchMatch(s.id, s.comicInfoSeriesTitle ?? s.folderName)}
+                      />
+                      <Button variant="secondary" size="mini" onclick={() => searchMatch(s.id, s.comicInfoSeriesTitle ?? s.folderName)}>
+                        Search
+                      </Button>
+                      {#if s.matchedSourceSeriesId}
+                        <Button variant="secondary" size="mini" onclick={() => act(s.id + ':clear', () => setMigrationSeriesMatch(s.id, null))}>
+                          Clear match
+                        </Button>
+                      {/if}
+                    </div>
+                    {#if matchResults[s.id]?.length}
+                      <ul class="m-0 mt-[0.3rem] flex list-none flex-col gap-[0.2rem] p-0">
+                        {#each matchResults[s.id] as c (c.sourceSeriesId)}
+                          <li class="flex items-center justify-between gap-2 text-[0.8rem]">
+                            <span
+                              class="flex min-w-0 cursor-default flex-col"
+                              title={c.altTitles.length ? `Also known as:\n${c.altTitles.join('\n')}` : undefined}
+                            >
+                              <span class="truncate">{c.title}</span>
+                              {#if c.altTitles.length}
+                                <span class="truncate text-[0.72rem] text-text-mute">
+                                  aka {c.altTitles[0]}{c.altTitles.length > 1 ? ` (+${c.altTitles.length - 1} more)` : ''}
+                                </span>
+                              {/if}
+                            </span>
+                            <Button
+                              variant="secondary"
+                              size="mini"
+                              disabled={busy[s.id + ':match']}
+                              onclick={() => act(s.id + ':match', () => setMigrationSeriesMatch(s.id, c.sourceSeriesId))}
+                            >
+                              {s.matchedSourceSeriesId === c.sourceSeriesId ? 'Selected' : 'Select'}
+                            </Button>
+                          </li>
+                        {/each}
+                      </ul>
+                    {/if}
+                  </label>
+
+                  <label class="flex min-w-[16rem] flex-1 flex-col gap-[0.3rem] text-[0.78rem] text-text-dim">
+                    Merge into existing library series (optional)
+                    <Select
+                      type="single"
+                      value={s.existingLibrarySeriesId ?? ''}
+                      onOpenChange={(open) => { if (open) loadLibraryTitles() }}
+                      onValueChange={(v) => act(s.id + ':merge', () => setMigrationMergeTarget(s.id, v || null))}
+                    >
+                      <SelectTrigger>
+                        {libraryTitles.find((t) => t.id === s.existingLibrarySeriesId)?.title ?? '— create new series —'}
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="" label="— create new series —">— create new series —</SelectItem>
+                        {#each libraryTitles as t (t.id)}<SelectItem value={t.id} label={t.title}>{t.title}</SelectItem>{/each}
+                      </SelectContent>
+                    </Select>
+                  </label>
+                </div>
+              {/if}
+
+              <table class="w-full border-collapse text-[0.78rem]">
+                <thead>
+                  <tr>
+                    <th class="border-b border-border px-[0.4rem] py-[0.3rem] text-left font-medium text-text-mute">File</th>
+                    <th class="border-b border-border px-[0.4rem] py-[0.3rem] text-left font-medium text-text-mute">#</th>
+                    <th class="border-b border-border px-[0.4rem] py-[0.3rem] text-left font-medium text-text-mute">Group</th>
+                    <th class="border-b border-border px-[0.4rem] py-[0.3rem] text-left font-medium text-text-mute">Pages</th>
+                    <th class="border-b border-border px-[0.4rem] py-[0.3rem] text-left font-medium text-text-mute">Size</th>
+                    <th class="border-b border-border px-[0.4rem] py-[0.3rem] text-left font-medium text-text-mute">Disposition</th>
+                    <th class="border-b border-border px-[0.4rem] py-[0.3rem] text-left font-medium text-text-mute">Flag</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {#each s.items as i (i.id)}
+                    <tr>
+                      <td class={`max-w-[22rem] border-b border-border-dim px-[0.4rem] py-[0.3rem] align-top [overflow-wrap:anywhere] ${i.isWinner ? 'text-ok' : ''}`}>
+                        {i.fileName}
+                      </td>
+                      <td class="border-b border-border-dim px-[0.4rem] py-[0.3rem] align-top">{i.number ?? '—'}</td>
+                      <td class="border-b border-border-dim px-[0.4rem] py-[0.3rem] align-top">{i.matchedGroup ?? '—'}</td>
+                      <td class="border-b border-border-dim px-[0.4rem] py-[0.3rem] align-top">{i.pageCount}</td>
+                      <td class="border-b border-border-dim px-[0.4rem] py-[0.3rem] align-top">{sizeOf(i.sizeBytes)}</td>
+                      <td class="border-b border-border-dim px-[0.4rem] py-[0.3rem] align-top">
+                        {#if s.status === 'Committed'}
+                          {i.disposition}
+                        {:else}
+                          <Select
+                            type="single"
+                            value={i.disposition}
+                            disabled={busy[i.id]}
+                            onValueChange={(v) => act(i.id, () => setMigrationItemDisposition(i.id, v))}
+                          >
+                            <SelectTrigger class="w-32">{i.disposition}</SelectTrigger>
+                            <SelectContent>
+                              {#each dispositions as d}<SelectItem value={d} label={d}>{d}</SelectItem>{/each}
+                            </SelectContent>
+                          </Select>
+                        {/if}
+                      </td>
+                      <td class="border-b border-border-dim px-[0.4rem] py-[0.3rem] align-top text-text-mute">{i.flagReason ?? ''}</td>
+                    </tr>
+                  {/each}
+                </tbody>
+              </table>
+
+              {#if s.status !== 'Committed'}
+                <Button
+                  disabled={busy[s.id + ':commit']}
+                  onclick={() => act(s.id + ':commit', () => commitMigrationSeries(s.id))}
+                >
+                  {#if busy[s.id + ':commit']}<Spinner />{/if}
+                  {busy[s.id + ':commit'] ? 'Committing…' : 'Commit this series'}
+                </Button>
+              {/if}
+            </div>
+          {/if}
+        </li>
+      {/each}
+    </ul>
+  {/if}
+</div>

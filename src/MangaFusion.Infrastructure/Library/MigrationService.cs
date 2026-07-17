@@ -1,0 +1,426 @@
+using Hangfire;
+using MangaFusion.Application.Library;
+using MangaFusion.Domain.Library;
+using MangaFusion.Infrastructure.Persistence;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
+
+namespace MangaFusion.Infrastructure.Library;
+
+public sealed class MigrationService(
+    AppDbContext db,
+    MigrationPaths paths,
+    ImportPaths importPaths,
+    MigrationMatcher matcher,
+    MigrationCommitter committer,
+    MigrationScanner scanner,
+    IBackgroundJobClient jobs,
+    ILogger<MigrationService> logger) : IMigrationService
+{
+    public async Task<Guid> StartScanAsync(CancellationToken ct = default)
+    {
+        // Manga by construction, stated rather than left to the enum's default: this tool matches files by
+        // their MangaDex chapter-UUID filename prefix and dedups by scanlation group, so there is no comic
+        // equivalent for it to scan.
+        var batch = new MigrationBatch { Kind = MediaKind.Manga };
+        db.MigrationBatches.Add(batch);
+        await db.SaveChangesAsync(ct);
+
+        jobs.Enqueue<MigrationService>(s => s.RunScanAsync(batch.Id, CancellationToken.None));
+        return batch.Id;
+    }
+
+    [AutomaticRetry(Attempts = 0)]
+    public async Task RunScanAsync(Guid batchId, CancellationToken ct)
+    {
+        var batch = await db.MigrationBatches.FirstOrDefaultAsync(b => b.Id == batchId, ct);
+        if (batch is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var scanResult = scanner.ScanInbox(paths.InboxRoot());
+            logger.LogDebug(
+                "Migration scan {BatchId}: found {Count} series folder(s) in the inbox, {DivertedCount} without " +
+                "ComicInfo.xml (diverted to the import inbox).",
+                batchId, scanResult.Folders.Count, scanResult.FoldersWithNoComicInfo.Count);
+
+            foreach (var dir in scanResult.FoldersWithNoComicInfo)
+            {
+                batch.DivertedFolders.Add(DivertToImportInbox(dir));
+            }
+
+            foreach (var folder in scanResult.Folders)
+            {
+                // Batch is set explicitly, not left to EF's navigation fixup: the merge-target guard reads
+                // Batch.Kind while this entity is still only Added, and a null nav there would NRE.
+                var migrationSeries = new MigrationSeries
+                {
+                    BatchId = batch.Id, Batch = batch, FolderName = folder.FolderName,
+                };
+                db.MigrationSeries.Add(migrationSeries);
+
+                try
+                {
+                    await ProcessFolderAsync(migrationSeries, folder, ct);
+                }
+                catch (Exception ex)
+                {
+                    migrationSeries.Status = MigrationSeriesStatus.Failed;
+                    migrationSeries.ConflictReason = $"Scan failed: {ex.Message}";
+                    logger.LogError(ex, "Migration scan failed for folder {Folder}", folder.FolderName);
+                }
+
+                await db.SaveChangesAsync(ct);
+            }
+
+            batch.Status = MigrationBatchStatus.Done;
+            logger.LogDebug("Migration scan {BatchId}: done.", batchId);
+        }
+        catch (Exception ex)
+        {
+            batch.Status = MigrationBatchStatus.Failed;
+            batch.Error = ex.Message;
+            logger.LogError(ex, "Migration scan failed for batch {BatchId}", batchId);
+        }
+
+        await db.SaveChangesAsync(ct);
+    }
+
+    public async Task<IReadOnlyList<MigrationBatchSummary>> ListBatchesAsync(CancellationToken ct = default) =>
+        (await db.MigrationBatches
+            .Include(b => b.Series)
+            .OrderByDescending(b => b.CreatedAt)
+            .ToListAsync(ct))
+        .Select(b => new MigrationBatchSummary(b.Id, b.CreatedAt, b.Status.ToString(), b.Series.Count, b.Error))
+        .ToList();
+
+    public async Task<MigrationBatchDetail?> GetBatchAsync(Guid batchId, CancellationToken ct = default)
+    {
+        var batch = await db.MigrationBatches
+            .Include(b => b.Series).ThenInclude(s => s.Items)
+            .AsSplitQuery()
+            .FirstOrDefaultAsync(b => b.Id == batchId, ct);
+
+        return batch is null ? null : ToDetail(batch);
+    }
+
+    public async Task RematchSeriesAsync(Guid migrationSeriesId, string? sourceSeriesId, CancellationToken ct = default)
+    {
+        var migrationSeries = await LoadSeriesAsync(migrationSeriesId, ct);
+        EnsureNotCommitted(migrationSeries); // its inbox folder is gone once committed — nothing to rescan
+        var folder = RescanFolder(migrationSeries.FolderName);
+
+        if (sourceSeriesId is null)
+        {
+            migrationSeries.MatchedSourceId = null;
+            migrationSeries.MatchedSourceSeriesId = null;
+            migrationSeries.MatchedTitle = null;
+            migrationSeries.Regime = MigrationRegime.Unmatched;
+            migrationSeries.Confidence = 0;
+            migrationSeries.GroupRanking = [];
+            migrationSeries.Items.Clear();
+            foreach (var file in folder.Files)
+            {
+                var pendingItem = ToPendingItem(file);
+                migrationSeries.Items.Add(pendingItem);
+                db.MigrationItems.Add(pendingItem); // force Added state (entity carries a client-set Guid key)
+            }
+
+            migrationSeries.Status = MigrationSeriesStatus.NeedsReview;
+            migrationSeries.ConflictReason = "Match cleared; pick a MangaDex series.";
+        }
+        else
+        {
+            var match = await matcher.MatchAgainstSeriesAsync(folder, sourceSeriesId, ct);
+            await ApplyMatchAsync(migrationSeries, match, ct);
+            migrationSeries.Status = MigrationSeriesStatus.NeedsReview; // manual actions always wait for explicit commit
+        }
+
+        await db.SaveChangesAsync(ct);
+    }
+
+    public async Task SetItemDispositionAsync(
+        Guid migrationItemId, string disposition, CancellationToken ct = default)
+    {
+        var item = await db.MigrationItems.Include(i => i.Series)
+            .FirstOrDefaultAsync(i => i.Id == migrationItemId, ct)
+            ?? throw new InvalidOperationException("Migration item not found.");
+        EnsureNotCommitted(item.Series);
+
+        if (!Enum.TryParse<MigrationItemDisposition>(disposition, ignoreCase: true, out var parsed)
+            || parsed == MigrationItemDisposition.Pending)
+        {
+            throw new InvalidOperationException("Disposition must be Import, Duplicate, or Quarantine.");
+        }
+
+        logger.LogDebug(
+            "Migration review: item {ItemId} ({FileName}) disposition -> {Disposition}.",
+            item.Id, item.FileName, parsed);
+
+        if (parsed == MigrationItemDisposition.Import)
+        {
+            // Enforce a single winner per chapter number — demote whichever item currently holds it.
+            var siblings = await db.MigrationItems
+                .Where(i => i.MigrationSeriesId == item.MigrationSeriesId
+                            && i.NumberKey == item.NumberKey
+                            && i.Id != item.Id
+                            && i.Disposition == MigrationItemDisposition.Import)
+                .ToListAsync(ct);
+            foreach (var sibling in siblings)
+            {
+                sibling.Disposition = MigrationItemDisposition.Duplicate;
+                sibling.IsWinner = false;
+                sibling.FlagReason = "Superseded by a manually-selected copy of this chapter.";
+            }
+        }
+
+        item.Disposition = parsed;
+        item.IsWinner = parsed == MigrationItemDisposition.Import;
+        item.FlagReason = parsed == MigrationItemDisposition.Import ? null : item.FlagReason;
+
+        await db.SaveChangesAsync(ct);
+    }
+
+    public async Task SetMergeTargetAsync(
+        Guid migrationSeriesId, Guid? existingLibrarySeriesId, CancellationToken ct = default)
+    {
+        var migrationSeries = await LoadSeriesAsync(migrationSeriesId, ct);
+        EnsureNotCommitted(migrationSeries);
+        if (existingLibrarySeriesId is { } id)
+        {
+            await MergeTarget.EnsureInLibraryAsync(db, id, migrationSeries.Batch.Kind, ct);
+        }
+
+        migrationSeries.ExistingLibrarySeriesId = existingLibrarySeriesId;
+        await db.SaveChangesAsync(ct);
+        logger.LogDebug(
+            "Migration review: series {SeriesId} merge target -> {Target}.",
+            migrationSeriesId, existingLibrarySeriesId?.ToString() ?? "(none — create new)");
+    }
+
+    public async Task CommitSeriesAsync(Guid migrationSeriesId, CancellationToken ct = default)
+    {
+        var migrationSeries = await LoadSeriesAsync(migrationSeriesId, ct);
+        EnsureNotCommitted(migrationSeries);
+        logger.LogDebug("Migration review: manually committing series {SeriesId} ({Folder}).",
+            migrationSeriesId, migrationSeries.FolderName);
+        await committer.CommitAsync(migrationSeries, ct);
+        await db.SaveChangesAsync(ct);
+    }
+
+    /// <summary>Commits every not-yet-committed, unambiguous series in a batch — the same "clean"
+    /// definition scanning used to auto-commit against before that was removed (see
+    /// <see cref="ProcessFolderAsync"/>) — so the (usually large) no-conflict majority can be cleared
+    /// in one action after reviewing/fixing the flagged ones. A failure on one series is recorded on
+    /// it (<see cref="MigrationSeriesStatus.Failed"/>, error as <see cref="MigrationSeries.ConflictReason"/>)
+    /// and doesn't stop the rest. Returns the number actually committed.</summary>
+    public async Task<int> CommitAllCleanAsync(Guid batchId, CancellationToken ct = default)
+    {
+        var candidates = await db.MigrationSeries
+            .Include(s => s.Items)
+            .Include(s => s.Batch)
+            .Where(s => s.BatchId == batchId && s.Status == MigrationSeriesStatus.NeedsReview)
+            .ToListAsync(ct);
+
+        var committed = 0;
+        foreach (var series in candidates.Where(IsClean))
+        {
+            try
+            {
+                await committer.CommitAsync(series, ct);
+                committed++;
+            }
+            catch (Exception ex)
+            {
+                series.Status = MigrationSeriesStatus.Failed;
+                series.ConflictReason = $"Bulk commit failed: {ex.Message}";
+                logger.LogError(ex, "Migration bulk commit failed for series {SeriesId} ({Folder}).",
+                    series.Id, series.FolderName);
+            }
+
+            await db.SaveChangesAsync(ct);
+        }
+
+        return committed;
+    }
+
+    private static bool IsClean(MigrationSeries series) =>
+        series.ConflictReason is null && series.Regime != MigrationRegime.Unmatched;
+
+    // --- internals -------------------------------------------------------------------------------
+
+    private async Task ProcessFolderAsync(MigrationSeries migrationSeries, ScannedSeriesFolder folder, CancellationToken ct)
+    {
+        var match = await matcher.MatchAsync(folder, ct);
+        await ApplyMatchAsync(migrationSeries, match, ct);
+        migrationSeries.Status = MigrationSeriesStatus.NeedsReview;
+
+        logger.LogDebug(
+            "Migration scan: {Folder} -> needs review ({Reason}).",
+            folder.FolderName, migrationSeries.ConflictReason ?? "no conflicts");
+    }
+
+    /// <summary>A folder with chapter-shaped files but no ComicInfo.xml anywhere in them almost
+    /// certainly isn't from the old MangaDex downloader this tool targets — move it straight into the
+    /// import wizard's inbox instead, where it can be scanned/matched there. No <see cref="MigrationSeries"/>
+    /// row is created for it; there's nothing to review here. Returns the folder name, for recording on
+    /// <see cref="MigrationBatch.DivertedFolders"/>.
+    ///
+    /// Always the <em>manga</em> import inbox: this tool only ever reads the manga migrate inbox, so
+    /// anything it diverts is manga by construction.</summary>
+    private string DivertToImportInbox(string sourceDir)
+    {
+        var folderName = Path.GetFileName(sourceDir);
+        var dest = UniquePath(importPaths.SeriesInboxFolder(MediaKind.Manga, folderName));
+        Directory.Move(sourceDir, dest);
+        logger.LogInformation(
+            "Migration scan: {Folder} has no ComicInfo.xml in any file — moved to the manga import inbox instead.",
+            folderName);
+        return folderName;
+    }
+
+    private static string UniquePath(string path)
+    {
+        if (!File.Exists(path) && !Directory.Exists(path))
+        {
+            return path;
+        }
+
+        var dir = Path.GetDirectoryName(path)!;
+        var name = Path.GetFileName(path);
+        var suffix = Guid.NewGuid().ToString("N")[..8];
+        return Path.Combine(dir, $"{name}-{suffix}");
+    }
+
+    private async Task ApplyMatchAsync(MigrationSeries migrationSeries, MatchResult match, CancellationToken ct)
+    {
+        migrationSeries.ComicInfoSeriesTitle = match.ComicInfoSeriesTitle;
+        migrationSeries.MatchedSourceId = match.MatchedSourceId;
+        migrationSeries.MatchedSourceSeriesId = match.MatchedSourceSeriesId;
+        migrationSeries.MatchedTitle = match.MatchedTitle;
+        migrationSeries.Regime = match.Regime;
+        migrationSeries.Confidence = match.Confidence;
+        migrationSeries.GroupRanking = match.GroupRanking.ToList();
+        migrationSeries.ConflictReason = match.ConflictReason;
+
+        migrationSeries.Items.Clear();
+        foreach (var item in match.Items)
+        {
+            // A matched item is keyed by MangaDex's own number (ResolvedNumber), not the local file's, so
+            // its NumberKey agrees with the feed-derived Chapter ChapterImporter creates at commit — see
+            // the drift explanation in MigrationMatcher.Resolve. A null ResolvedNumber is itself a
+            // meaningful matched value (mirrors the feed's own null), so it must still go through Normalize
+            // rather than falling back to the local number.
+            var (number, numberKey) = item.MatchedSourceChapterId is not null
+                ? (item.ResolvedNumber, ChapterNumber.Normalize(item.ResolvedNumber).Key)
+                : (item.File.Number, item.File.NumberKey);
+
+            var newItem = new MigrationItem
+            {
+                FileName = item.File.FileName,
+                UuidPrefix = item.File.UuidPrefix,
+                Number = number,
+                NumberKey = numberKey,
+                ChapterTitle = item.File.ChapterTitle,
+                PageCount = item.File.PageCount,
+                SizeBytes = item.File.SizeBytes,
+                MatchedSourceChapterId = item.MatchedSourceChapterId,
+                MatchedGroup = item.MatchedGroup,
+                Disposition = item.Disposition,
+                IsWinner = item.IsWinner,
+                FlagReason = item.FlagReason,
+            };
+            migrationSeries.Items.Add(newItem);
+            // Force Added state: MigrationItem has a client-set Guid key, and when migrationSeries is
+            // an already-tracked (not newly-Added) parent — as it is on rematch — EF's graph tracker
+            // can't safely infer that adding to the navigation collection alone means "insert this".
+            // Without this, EF sometimes emits an UPDATE for the new row instead of an INSERT, which
+            // then fails with DbUpdateConcurrencyException (0 rows affected — the row never existed).
+            db.MigrationItems.Add(newItem);
+        }
+
+        await DetectMergeTargetAsync(migrationSeries, ct);
+    }
+
+    /// <summary>Auto-suggests merging into an existing library series with the same title that isn't
+    /// already linked to this MangaDex id — e.g. a hand-created local series. Never overwrites its
+    /// metadata; only adds chapters/files on commit. The user can clear this in review.</summary>
+    private async Task DetectMergeTargetAsync(MigrationSeries migrationSeries, CancellationToken ct)
+    {
+        if (migrationSeries.MatchedSourceSeriesId is null)
+        {
+            migrationSeries.ExistingLibrarySeriesId = null;
+            return;
+        }
+
+        var alreadyLinked = await db.Series.AnyAsync(
+            s => s.SourceLinks.Any(l => l.SourceId == MigrationMatcher.SourceId
+                                         && l.SourceSeriesId == migrationSeries.MatchedSourceSeriesId), ct);
+        if (alreadyLinked)
+        {
+            migrationSeries.ExistingLibrarySeriesId = null; // FindOrCreateSeriesAsync will find it by link
+            return;
+        }
+
+        var candidates = new[] { migrationSeries.MatchedTitle, migrationSeries.ComicInfoSeriesTitle }
+            .Where(t => !string.IsNullOrWhiteSpace(t))
+            .Select(t => t!.ToLowerInvariant())
+            .Distinct()
+            .ToList();
+
+        var titleMatch = await MergeTarget.FindByTitleAsync(db, migrationSeries.Batch.Kind, candidates, ct);
+
+        migrationSeries.ExistingLibrarySeriesId = titleMatch?.Id;
+    }
+
+    private ScannedSeriesFolder RescanFolder(string folderName)
+    {
+        var dir = paths.SeriesInboxFolder(folderName);
+        var files = scanner.ScanSeriesFolder(dir);
+        return new ScannedSeriesFolder(folderName, dir, files);
+    }
+
+    private static MigrationItem ToPendingItem(ScannedFile file) => new()
+    {
+        FileName = file.FileName,
+        UuidPrefix = file.UuidPrefix,
+        Number = file.Number,
+        NumberKey = file.NumberKey,
+        ChapterTitle = file.ChapterTitle,
+        PageCount = file.PageCount,
+        SizeBytes = file.SizeBytes,
+        Disposition = MigrationItemDisposition.Pending,
+    };
+
+    // Batch is included because the committer reads its MediaKind to decide which library the series
+    // lands in.
+    private async Task<MigrationSeries> LoadSeriesAsync(Guid migrationSeriesId, CancellationToken ct) =>
+        await db.MigrationSeries.Include(s => s.Items).Include(s => s.Batch)
+            .FirstOrDefaultAsync(s => s.Id == migrationSeriesId, ct)
+        ?? throw new InvalidOperationException("Migration series not found.");
+
+    private static void EnsureNotCommitted(MigrationSeries series)
+    {
+        if (series.Status == MigrationSeriesStatus.Committed)
+        {
+            throw new InvalidOperationException("This series has already been committed.");
+        }
+    }
+
+    private static MigrationBatchDetail ToDetail(MigrationBatch batch) => new(
+        batch.Id, batch.CreatedAt, batch.Status.ToString(), batch.Error,
+        batch.DivertedFolders, batch.Series.Select(ToDetail).ToList());
+
+    private static MigrationSeriesDetail ToDetail(MigrationSeries s) => new(
+        s.Id, s.FolderName, s.ComicInfoSeriesTitle, s.MatchedSourceSeriesId, s.MatchedTitle,
+        s.Regime.ToString(), s.Confidence, s.Status.ToString(), s.ConflictReason,
+        s.ExistingLibrarySeriesId, s.CommittedLibrarySeriesId, s.GroupRanking,
+        s.Items.OrderBy(i => i.FileName, StringComparer.OrdinalIgnoreCase).Select(ToDetail).ToList());
+
+    private static MigrationItemDetail ToDetail(MigrationItem i) => new(
+        i.Id, i.FileName, i.UuidPrefix, i.Number, i.ChapterTitle, i.PageCount, i.SizeBytes,
+        i.MatchedGroup, i.Disposition.ToString(), i.IsWinner, i.FlagReason);
+}
