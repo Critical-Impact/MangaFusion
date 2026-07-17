@@ -19,6 +19,10 @@ public sealed record ResolvedPage(byte[]? Bytes, string Extension)
 /// encoded result isn't actually smaller" is a routine outcome, not a rare edge case.</summary>
 public sealed class PageEncodingResolver(IPageImageEncoder encoder, ILogger<PageEncodingResolver> logger)
 {
+    /// <summary>Whether the underlying encoder will do anything. Lets a caller skip work it only needs
+    /// in order to feed the encoder (see <see cref="IPageImageEncoder.Enabled"/>).</summary>
+    public bool Enabled => encoder.Enabled;
+
     public async Task<ResolvedPage> ResolveAsync(PageFile page, CancellationToken ct)
     {
         var originalExt = Path.GetExtension(page.ArchiveName) is { Length: > 0 } ext ? ext : ".jpg";

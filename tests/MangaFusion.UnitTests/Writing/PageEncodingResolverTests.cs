@@ -12,12 +12,16 @@ public class PageEncodingResolverTests : IDisposable
 
     private sealed class StubEncoder(Func<string, EncodedPage?> respond) : IPageImageEncoder
     {
+        public bool Enabled => true;
+
         public Task<EncodedPage?> TryEncodeAsync(string sourcePath, CancellationToken ct) =>
             Task.FromResult(respond(sourcePath));
     }
 
     private sealed class ThrowingEncoder : IPageImageEncoder
     {
+        public bool Enabled => true;
+
         public Task<EncodedPage?> TryEncodeAsync(string sourcePath, CancellationToken ct) =>
             throw new InvalidOperationException("boom");
     }

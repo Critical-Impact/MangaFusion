@@ -15,8 +15,10 @@ public class ArtifactPageReencoderTests : IDisposable
 
     public ArtifactPageReencoderTests() => Directory.CreateDirectory(_dir);
 
-    private sealed class StubEncoder(Func<string, EncodedPage?> respond) : IPageImageEncoder
+    private sealed class StubEncoder(Func<string, EncodedPage?> respond, bool enabled = true) : IPageImageEncoder
     {
+        public bool Enabled => enabled;
+
         public Task<EncodedPage?> TryEncodeAsync(string sourcePath, CancellationToken ct) =>
             Task.FromResult(respond(sourcePath));
     }
@@ -99,6 +101,33 @@ public class ArtifactPageReencoderTests : IDisposable
         using var ms = new MemoryStream();
         entry.Open().CopyTo(ms);
         Assert.Equal([0xAA, 0xBB, 0xCC], ms.ToArray());
+    }
+
+    [Fact]
+    public async Task Cbz_is_left_byte_identical_when_encoding_disabled()
+    {
+        var path = WriteFixtureCbz();
+        var before = await File.ReadAllBytesAsync(path);
+        // An encoder that WOULD accept every page, but reports disabled: the reencoder must not open the
+        // archive at all, so it stays byte-for-byte identical (no entry rewrite, no Update-mode reserialize).
+        var reencoder = Reencoder(new StubEncoder(_ => new EncodedPage([0x01], ".webp"), enabled: false));
+
+        await reencoder.ReencodeAsync(path, StorageFormat.Cbz, CancellationToken.None);
+
+        Assert.Equal(before, await File.ReadAllBytesAsync(path));
+    }
+
+    [Fact]
+    public async Task Folder_is_left_untouched_when_encoding_disabled()
+    {
+        var dir = WriteFixtureFolder();
+        var reencoder = Reencoder(new StubEncoder(_ => new EncodedPage([0x01], ".webp"), enabled: false));
+
+        await reencoder.ReencodeAsync(dir, StorageFormat.Folder, CancellationToken.None);
+
+        var names = Directory.EnumerateFiles(dir).Select(Path.GetFileName).OrderBy(n => n).ToList();
+        Assert.Equal(["001.jpg", "002.jpg", "ComicInfo.xml"], names);
+        Assert.Equal([0xAA, 0xBB, 0xCC], File.ReadAllBytes(Path.Combine(dir, "001.jpg")));
     }
 
     [Fact]

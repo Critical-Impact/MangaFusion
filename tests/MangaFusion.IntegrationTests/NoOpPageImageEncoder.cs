@@ -8,6 +8,10 @@ namespace MangaFusion.IntegrationTests;
 /// codec behavior, which is covered separately by the encoder/resolver's own unit tests.</summary>
 public sealed class NoOpPageImageEncoder : IPageImageEncoder
 {
+    // Enabled: it stands in for an active encoder that simply declines every page, not a disabled one —
+    // so the migration/write plumbing under test still runs its full path.
+    public bool Enabled => true;
+
     public Task<EncodedPage?> TryEncodeAsync(string sourcePath, CancellationToken ct) =>
         Task.FromResult<EncodedPage?>(null);
 }

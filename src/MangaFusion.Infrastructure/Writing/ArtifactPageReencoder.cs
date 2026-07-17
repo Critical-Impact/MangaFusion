@@ -13,8 +13,18 @@ namespace MangaFusion.Infrastructure.Writing;
 /// library rather than constructing them itself).</summary>
 public sealed class ArtifactPageReencoder(PageEncodingResolver resolver, LibraryPaths paths)
 {
-    public Task ReencodeAsync(string path, StorageFormat format, CancellationToken ct) =>
-        format == StorageFormat.Cbz ? ReencodeCbzAsync(path, ct) : ReencodeFolderAsync(path, ct);
+    public Task ReencodeAsync(string path, StorageFormat format, CancellationToken ct)
+    {
+        // When encoding is off, every page would resolve to "keep the original" anyway — so don't crack
+        // the artifact open at all. Skips extracting every page to temp (CBZ) and, for a CBZ, the whole
+        // Update-mode rewrite of the archive; the migration's separate ComicInfo rewrite still runs.
+        if (!resolver.Enabled)
+        {
+            return Task.CompletedTask;
+        }
+
+        return format == StorageFormat.Cbz ? ReencodeCbzAsync(path, ct) : ReencodeFolderAsync(path, ct);
+    }
 
     private async Task ReencodeCbzAsync(string cbzPath, CancellationToken ct)
     {

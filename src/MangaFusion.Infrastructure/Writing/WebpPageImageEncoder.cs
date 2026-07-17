@@ -22,6 +22,8 @@ public sealed class WebpPageImageEncoder : IPageImageEncoder
         _effort = Math.Clamp(config.GetValue<int?>("Encoding:Effort") ?? 4, 0, 6);
     }
 
+    public bool Enabled => _enabled;
+
     public async Task<EncodedPage?> TryEncodeAsync(string sourcePath, CancellationToken ct)
     {
         if (!_enabled)

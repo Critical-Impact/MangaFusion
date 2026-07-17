@@ -9,5 +9,11 @@ public sealed record EncodedPage(byte[] Bytes, string Extension);
 /// mature .NET binding exists) plugs into without touching any caller.</summary>
 public interface IPageImageEncoder
 {
+    /// <summary>Whether this encoder can produce anything at all (configured on, codec available).
+    /// When false, <see cref="TryEncodeAsync"/> always returns <c>null</c>, so callers that would do
+    /// expensive prep just to feed it — e.g. cracking open an existing archive to re-encode it in
+    /// place — can skip that work entirely rather than doing it for a guaranteed no-op.</summary>
+    bool Enabled { get; }
+
     Task<EncodedPage?> TryEncodeAsync(string sourcePath, CancellationToken ct);
 }
