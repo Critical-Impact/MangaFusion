@@ -239,6 +239,28 @@ public sealed class LibraryService(
             .Select(s => (s.Id, s.Title))
             .ToList();
 
+    public async Task<IReadOnlyList<(string SourceId, string SourceSeriesId, Guid LibraryId)>> ResolveLibraryLinksAsync(
+        IReadOnlyCollection<(string SourceId, string SourceSeriesId)> refs, CancellationToken ct = default)
+    {
+        if (refs.Count == 0) return [];
+
+        // EF can't translate a set of (source, series) pairs, so pre-filter on the two id sets in SQL,
+        // then narrow to the exact pairs in memory. Both sets are small (one browse page).
+        var sourceIds = refs.Select(r => r.SourceId).Distinct().ToList();
+        var seriesIds = refs.Select(r => r.SourceSeriesId).Distinct().ToList();
+
+        var links = await db.Series
+            .SelectMany(s => s.SourceLinks, (s, l) => new { l.SourceId, l.SourceSeriesId, LibraryId = s.Id })
+            .Where(x => sourceIds.Contains(x.SourceId) && seriesIds.Contains(x.SourceSeriesId))
+            .ToListAsync(ct);
+
+        var wanted = refs.ToHashSet();
+        return links
+            .Where(x => wanted.Contains((x.SourceId, x.SourceSeriesId)))
+            .Select(x => (x.SourceId, x.SourceSeriesId, x.LibraryId))
+            .ToList();
+    }
+
     /// <summary>The cover's absolute path, or null if none is cached. Resolution lives here rather than in
     /// the endpoint because a stored cover path is relative to its own library's root — the caller would
     /// otherwise need the series' kind just to turn the string into a file.</summary>

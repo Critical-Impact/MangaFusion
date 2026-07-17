@@ -69,6 +69,12 @@ public interface ILibraryService
     /// not for the browse UI which goes through <see cref="QueryLibraryAsync"/>.</summary>
     Task<IReadOnlyList<(Guid Id, string Title)>> GetLibraryTitlesAsync(CancellationToken ct = default);
 
+    /// <summary>Which of the given source refs are already in the library, mapped to their library series
+    /// id — lets the browse grid mark already-added series (and link straight to them) without a query per
+    /// card. A ref with no matching library series is simply absent from the result.</summary>
+    Task<IReadOnlyList<(string SourceId, string SourceSeriesId, Guid LibraryId)>> ResolveLibraryLinksAsync(
+        IReadOnlyCollection<(string SourceId, string SourceSeriesId)> refs, CancellationToken ct = default);
+
     /// <summary>Absolute path to the series' cached cover, or null if none. Resolved here (not by the
     /// caller) because a stored cover path is relative to its own library's root.</summary>
     Task<string?> GetCoverFileAsync(Guid seriesId, CancellationToken ct = default);

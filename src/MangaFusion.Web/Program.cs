@@ -296,6 +296,69 @@ app.MapPut("/api/me/language", async (LanguageRequest request, ClaimsPrincipal u
     })
     .RequireAuthorization();
 
+// Change the signed-in user's email. Username tracks email (that's what login uses), so both move
+// together. RequireConfirmedAccount is off, so the new address is confirmed immediately.
+app.MapPut("/api/me/email", async (
+        ChangeEmailRequest request,
+        UserManager<ApplicationUser> userManager,
+        SignInManager<ApplicationUser> signInManager,
+        ClaimsPrincipal principal) =>
+    {
+        var newEmail = request.Email?.Trim();
+        if (string.IsNullOrWhiteSpace(newEmail))
+            return Results.ValidationProblem(new Dictionary<string, string[]>
+                { ["email"] = ["Email is required."] });
+
+        var user = await userManager.GetUserAsync(principal);
+        if (user is null) return Results.Unauthorized();
+
+        if (string.Equals(user.Email, newEmail, StringComparison.OrdinalIgnoreCase))
+            return Results.Ok();
+
+        var existing = await userManager.FindByEmailAsync(newEmail);
+        if (existing is not null && existing.Id != user.Id)
+            return Results.ValidationProblem(new Dictionary<string, string[]>
+                { ["email"] = ["That email is already in use."] });
+
+        var setEmail = await userManager.SetEmailAsync(user, newEmail);
+        if (!setEmail.Succeeded) return ValidationProblemFromIdentity(setEmail);
+
+        var setName = await userManager.SetUserNameAsync(user, newEmail);
+        if (!setName.Succeeded) return ValidationProblemFromIdentity(setName);
+
+        user.EmailConfirmed = true;
+        await userManager.UpdateAsync(user);
+
+        // Refresh the auth cookie so its claims reflect the new email/username.
+        await signInManager.RefreshSignInAsync(user);
+        return Results.Ok();
+    })
+    .RequireAuthorization();
+
+// Change the signed-in user's password. Requires the current password; applies the same policy as
+// registration.
+app.MapPut("/api/me/password", async (
+        ChangePasswordRequest request,
+        UserManager<ApplicationUser> userManager,
+        SignInManager<ApplicationUser> signInManager,
+        ClaimsPrincipal principal) =>
+    {
+        if (string.IsNullOrEmpty(request.CurrentPassword) || string.IsNullOrEmpty(request.NewPassword))
+            return Results.ValidationProblem(new Dictionary<string, string[]>
+                { ["password"] = ["Current and new password are required."] });
+
+        var user = await userManager.GetUserAsync(principal);
+        if (user is null) return Results.Unauthorized();
+
+        var result = await userManager.ChangePasswordAsync(user, request.CurrentPassword, request.NewPassword);
+        if (!result.Succeeded) return ValidationProblemFromIdentity(result);
+
+        // Changing the password invalidates the old security stamp; refresh so the user stays signed in.
+        await signInManager.RefreshSignInAsync(user);
+        return Results.Ok();
+    })
+    .RequireAuthorization();
+
 // Backs every language picker in the frontend (default language, follow/series auto-download
 // languages) — a fixed known-language list rather than deriving options from whatever's already
 // been observed/downloaded, so a language can be pre-selected before any release exists in it.
@@ -329,9 +392,19 @@ app.MapFallbackToFile("index.html");
 app.Run();
 
 // Exposed for WebApplicationFactory-based integration tests.
-public partial class Program;
+public partial class Program
+{
+    // Turns Identity's failure codes into a ValidationProblem the SPA's extractError() can surface.
+    private static IResult ValidationProblemFromIdentity(IdentityResult result) =>
+        Results.ValidationProblem(new Dictionary<string, string[]>
+        {
+            [""] = result.Errors.Select(e => e.Description).ToArray()
+        });
+}
 
 public record ThemeRequest(string Theme);
 public record LanguageRequest(string? Language);
 public record ModeRequest(string Mode);
 public record HomeScopeRequest(bool AcrossLibraries);
+public record ChangeEmailRequest(string? Email);
+public record ChangePasswordRequest(string? CurrentPassword, string? NewPassword);

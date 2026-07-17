@@ -4,11 +4,19 @@
   import { notify } from './notify'
   import PosterCard from './PosterCard.svelte'
 
-  let { series, sourceLabel }: { series: Series; sourceLabel?: string } = $props()
+  let {
+    series,
+    sourceLabel,
+    libraryId,
+  }: { series: Series; sourceLabel?: string; libraryId?: string } = $props()
 
   let adding = $state(false)
-  let added = $state(false)
   let previewing = $state(false)
+  // The library id once known — either passed in (already in library, from the grid's batch lookup) or
+  // returned by an add in this session. Either means "in library".
+  let addedId = $state<string | undefined>(undefined)
+  const inLibraryId = $derived(addedId ?? libraryId)
+  const inLibrary = $derived(!!inLibraryId)
 
   function open() {
     push(`/series/${series.sourceId}/${series.sourceSeriesId}`)
@@ -48,10 +56,15 @@
 
   async function add(e: MouseEvent) {
     e.stopPropagation()
+    // Already in the library → jump to it rather than re-adding.
+    if (inLibraryId) {
+      push(`/library/${inLibraryId}`)
+      return
+    }
     adding = true
     try {
-      await addToLibrary(series.sourceId, series.sourceSeriesId)
-      added = true
+      const { id } = await addToLibrary(series.sourceId, series.sourceSeriesId)
+      addedId = id
     } catch {
       /* surfaced on the series page if it matters */
     } finally {
@@ -98,12 +111,12 @@
       </span>
     {/if}
     <button
-      class={`pointer-events-auto absolute top-[0.4rem] right-[0.4rem] grid h-[1.7rem] w-[1.7rem] cursor-pointer place-items-center rounded-[var(--r-pill)] border-0 text-[1rem] leading-none font-bold text-white disabled:cursor-default ${added ? 'bg-green-500/[0.92]' : 'bg-primary/[0.92]'}`}
+      class={`pointer-events-auto absolute top-[0.4rem] right-[0.4rem] grid h-[1.7rem] w-[1.7rem] cursor-pointer place-items-center rounded-[var(--r-pill)] border-0 text-[1rem] leading-none font-bold text-white disabled:cursor-default ${inLibrary ? 'bg-green-500/[0.92]' : 'bg-primary/[0.92]'}`}
       onclick={add}
-      disabled={adding || added}
-      title={added ? 'In library' : 'Add to library'}
+      disabled={adding}
+      title={inLibrary ? 'In library — open it' : 'Add to library'}
     >
-      {added ? '✓' : adding ? '…' : '+'}
+      {inLibrary ? '✓' : adding ? '…' : '+'}
     </button>
     <button
       class="pointer-events-auto absolute top-[2.4rem] right-[0.4rem] grid h-[1.7rem] w-[1.7rem] cursor-pointer place-items-center rounded-[var(--r-pill)] border-0 bg-black/[0.6] text-[0.85rem] leading-none text-white disabled:cursor-default"

@@ -4,6 +4,12 @@ namespace MangaFusion.Web.Models;
 
 public sealed record AddSeriesRequest(string SourceId, string SourceSeriesId);
 
+/// <summary>A batch "are these already in the library?" query for the browse grid.</summary>
+public sealed record LibraryMembershipRequest(IReadOnlyList<AddSeriesRequest>? Refs);
+
+/// <summary>One already-in-library source ref, carrying the library series id to link to.</summary>
+public sealed record LibraryMembershipDto(string SourceId, string SourceSeriesId, Guid LibraryId);
+
 public sealed record FollowRequest(string[]? Languages, bool AutoDownload);
 
 public sealed record LibraryTitleDto(Guid Id, string Title);

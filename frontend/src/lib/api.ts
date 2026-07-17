@@ -165,6 +165,26 @@ export async function setUserDefaultLanguage(language: string | null): Promise<v
   if (!res.ok) throw new Error(await extractError(res))
 }
 
+export async function changeEmail(email: string): Promise<void> {
+  const res = await fetch('/api/me/email', {
+    method: 'PUT',
+    headers: jsonHeaders,
+    credentials: 'include',
+    body: JSON.stringify({ email }),
+  })
+  if (!res.ok) throw new Error(await extractError(res))
+}
+
+export async function changePassword(currentPassword: string, newPassword: string): Promise<void> {
+  const res = await fetch('/api/me/password', {
+    method: 'PUT',
+    headers: jsonHeaders,
+    credentials: 'include',
+    body: JSON.stringify({ currentPassword, newPassword }),
+  })
+  if (!res.ok) throw new Error(await extractError(res))
+}
+
 export const getLanguages = () => getJson<LanguageOption[]>('/api/languages')
 
 // --- Sources ---------------------------------------------------------------------------------
@@ -366,6 +386,20 @@ async function send<T>(url: string, method: string, body?: unknown): Promise<T> 
 
 export const addToLibrary = (sourceId: string, sourceSeriesId: string) =>
   send<{ id: string }>('/api/library/series', 'POST', { sourceId, sourceSeriesId })
+
+export interface SeriesRef {
+  sourceId: string
+  sourceSeriesId: string
+}
+
+export interface LibraryMembership extends SeriesRef {
+  libraryId: string
+}
+
+/** Which of the given source series are already in the library, with the library id to link to.
+ * Refs absent from the result aren't in the library. */
+export const getLibraryMembership = (refs: SeriesRef[]) =>
+  send<LibraryMembership[]>('/api/library/series/membership', 'POST', { refs })
 
 export interface TagInfo {
   id: string

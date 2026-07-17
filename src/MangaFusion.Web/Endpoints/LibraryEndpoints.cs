@@ -17,6 +17,7 @@ public static class LibraryEndpoints
         var group = app.MapGroup("/api/library").RequireAuthorization();
 
         group.MapPost("/series", AddSeries);
+        group.MapPost("/series/membership", Membership);
         group.MapGet("/series", ListSeries);
         group.MapGet("/series/titles", GetTitles);
         group.MapGet("/tags", GetTags);
@@ -251,6 +252,20 @@ public static class LibraryEndpoints
 
     private static async Task<IResult> GetTitles(ILibraryService library, CancellationToken ct) =>
         Results.Ok((await library.GetLibraryTitlesAsync(ct)).Select(s => new LibraryTitleDto(s.Id, s.Title)));
+
+    // Batch membership check for the browse grid: which of these source series are already in the
+    // library, and under which library id (so the card can link straight there).
+    private static async Task<IResult> Membership(
+        LibraryMembershipRequest request, ILibraryService library, CancellationToken ct)
+    {
+        var refs = (request.Refs ?? [])
+            .Select(r => (r.SourceId, r.SourceSeriesId))
+            .ToList();
+        if (refs.Count == 0) return Results.Ok(Array.Empty<LibraryMembershipDto>());
+
+        var matches = await library.ResolveLibraryLinksAsync(refs, ct);
+        return Results.Ok(matches.Select(m => new LibraryMembershipDto(m.SourceId, m.SourceSeriesId, m.LibraryId)));
+    }
 
     private static async Task<IResult> GetSeries(
         Guid id, ClaimsPrincipal user, ILibraryService library, IReaderService reader,

@@ -3,8 +3,10 @@
   import { THEMES, themeState, setTheme, type ThemeId } from '../lib/theme.svelte'
   import { Select, SelectTrigger, SelectContent, SelectItem } from '../lib/components/ui/select/index.js'
   import { Button } from '../lib/components/ui/button/index.js'
+  import { Input } from '../lib/components/ui/input/index.js'
+  import { Label } from '../lib/components/ui/label/index.js'
   import { Spinner } from '../lib/components/ui/spinner/index.js'
-  import { setUserDefaultLanguage } from '../lib/api'
+  import { setUserDefaultLanguage, changeEmail, changePassword } from '../lib/api'
   import { notify } from '../lib/notify'
   import { languagesState, ensureLanguagesLoaded, languageName } from '../lib/languages.svelte'
   import { homeScope, setHomeAcrossLibraries, brandName } from '../lib/mode.svelte'
@@ -33,6 +35,64 @@
       savingLanguage = false
     }
   }
+
+  let email = $state(session.me?.email ?? '')
+  let savingEmail = $state(false)
+
+  async function saveEmail() {
+    const next = email.trim()
+    if (next === '') {
+      notify.error('Email is required.')
+      return
+    }
+    if (next.toLowerCase() === (session.me?.email ?? '').toLowerCase()) {
+      notify.error('That is already your email.')
+      return
+    }
+    savingEmail = true
+    try {
+      await changeEmail(next)
+      if (session.me) session.me.email = next
+      email = next
+      notify.success('Email updated.')
+    } catch (e) {
+      notify.error(e instanceof Error ? e.message : 'Failed to update email.')
+    } finally {
+      savingEmail = false
+    }
+  }
+
+  let currentPassword = $state('')
+  let newPassword = $state('')
+  let confirmPassword = $state('')
+  let savingPassword = $state(false)
+
+  async function savePassword() {
+    if (currentPassword === '') {
+      notify.error('Enter your current password.')
+      return
+    }
+    if (newPassword.length < 8) {
+      notify.error('New password must be at least 8 characters.')
+      return
+    }
+    if (newPassword !== confirmPassword) {
+      notify.error('New passwords do not match.')
+      return
+    }
+    savingPassword = true
+    try {
+      await changePassword(currentPassword, newPassword)
+      currentPassword = ''
+      newPassword = ''
+      confirmPassword = ''
+      notify.success('Password changed.')
+    } catch (e) {
+      notify.error(e instanceof Error ? e.message : 'Failed to change password.')
+    } finally {
+      savingPassword = false
+    }
+  }
 </script>
 
 <section class="mx-auto max-w-[1100px] px-5 py-6">
@@ -40,8 +100,52 @@
 
   <div class="flex max-w-[520px] flex-col gap-[1.1rem]">
     <div class="flex flex-col gap-[0.35rem] text-[0.85rem] text-text-2">
-      <span>Email</span>
-      <span class="text-[0.95rem] text-text">{session.me?.email}</span>
+      <span>Account</span>
+      <form class="flex flex-col gap-[0.3rem] text-[0.8rem] text-text-dim" onsubmit={(e) => { e.preventDefault(); saveEmail() }}>
+        <Label for="profile-email">Email</Label>
+        <div class="flex items-center gap-2.5">
+          <Input id="profile-email" type="email" class="w-auto min-w-64" bind:value={email} autocomplete="email" />
+          <Button type="submit" size="sm" disabled={savingEmail}>
+            {#if savingEmail}<Spinner />{/if}
+            {savingEmail ? 'Saving…' : 'Save'}
+          </Button>
+        </div>
+      </form>
+      <span class="muted text-[0.75rem]">You sign in with this address.</span>
+
+      <form class="mt-2 flex flex-col gap-[0.5rem] text-[0.8rem] text-text-dim" onsubmit={(e) => { e.preventDefault(); savePassword() }}>
+        <Label for="profile-current-password">Change password</Label>
+        <Input
+          id="profile-current-password"
+          type="password"
+          class="w-auto min-w-64"
+          placeholder="Current password"
+          bind:value={currentPassword}
+          autocomplete="current-password"
+        />
+        <Input
+          id="profile-new-password"
+          type="password"
+          class="w-auto min-w-64"
+          placeholder="New password (min 8)"
+          bind:value={newPassword}
+          autocomplete="new-password"
+        />
+        <Input
+          id="profile-confirm-password"
+          type="password"
+          class="w-auto min-w-64"
+          placeholder="Confirm new password"
+          bind:value={confirmPassword}
+          autocomplete="new-password"
+        />
+        <div>
+          <Button type="submit" size="sm" disabled={savingPassword}>
+            {#if savingPassword}<Spinner />{/if}
+            {savingPassword ? 'Saving…' : 'Change password'}
+          </Button>
+        </div>
+      </form>
     </div>
 
     <div class="flex flex-col gap-[0.35rem] text-[0.85rem] text-text-2">

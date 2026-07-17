@@ -31,7 +31,7 @@
 
 <main class="center">
   <section class="card w-full max-w-[22rem] p-8">
-    <img src="/logo.svg" alt={brandName()} class="mx-auto mb-3 block w-40" />
+    <h1 class="mb-1 text-[1.6rem] text-brand-soft">{brandName()}</h1>
     <p class="muted">{mode === 'login' ? 'Sign in to continue' : 'Create an account'}</p>
     <form class="mt-5 flex flex-col gap-[0.9rem]" onsubmit={submit}>
       <label class="flex flex-col gap-[0.35rem] text-[0.85rem] text-text-dim">
