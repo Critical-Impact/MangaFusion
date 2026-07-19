@@ -18,6 +18,7 @@ public static class MigrationEndpoints
         group.MapPatch("/items/{id:guid}", SetItemDisposition);
         group.MapPost("/series/{id:guid}/commit", CommitSeries);
         group.MapPost("/batches/{id:guid}/commit-clean", CommitAllClean);
+        group.MapPost("/series/{id:guid}/clear-conflict", ClearConflict);
     }
 
     private static async Task<IResult> StartScan(IMigrationService migration, CancellationToken ct)
@@ -83,6 +84,19 @@ public static class MigrationEndpoints
         {
             await migration.StartCommitSeriesAsync(id, ct);
             // Enqueued to run in the background; the client polls the batch (now Committing) for completion.
+            return Results.NoContent();
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(new { error = ex.Message });
+        }
+    }
+
+    private static async Task<IResult> ClearConflict(Guid id, IMigrationService migration, CancellationToken ct)
+    {
+        try
+        {
+            await migration.ClearConflictAsync(id, ct);
             return Results.NoContent();
         }
         catch (InvalidOperationException ex)

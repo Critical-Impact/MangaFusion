@@ -86,6 +86,7 @@ export interface Series {
   originalLanguage: string | null
   availableTranslatedLanguages: string[]
   lastChapter: string | null
+  siteUrl: string | null
 }
 
 export interface Chapter {
@@ -811,6 +812,9 @@ export const setMigrationItemDisposition = (itemId: string, disposition: string)
 // 'Committing' and the caller polls it for completion.
 export const commitMigrationSeries = (seriesId: string) =>
   send<void>(`/api/migration/series/${seriesId}/commit`, 'POST', {})
+
+export const clearMigrationConflict = (seriesId: string) =>
+  send<void>(`/api/migration/series/${seriesId}/clear-conflict`, 'POST', {})
 
 export const commitAllCleanMigrationSeries = (batchId: string) =>
   send<void>(`/api/migration/batches/${batchId}/commit-clean`, 'POST', {})

@@ -90,4 +90,7 @@ public interface IMigrationService
     /// <summary>Hangfire job entry point for <see cref="StartCommitAllCleanAsync"/> — not normally called
     /// directly.</summary>
     Task RunCommitAllCleanAsync(Guid batchId, CancellationToken ct);
+
+    /// <summary>Clears the conflict status on a series that is to be migrated.</summary>
+    Task ClearConflictAsync(Guid migrationSeriesId, CancellationToken ct = default);
 }

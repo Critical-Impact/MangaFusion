@@ -2,20 +2,20 @@
   import { onDestroy } from 'svelte'
   import { link } from 'svelte-spa-router'
   import {
-    startMigrationScan,
-    getMigrationBatches,
-    getMigrationBatch,
-    setMigrationSeriesMatch,
-    setMigrationMergeTarget,
-    setMigrationItemDisposition,
-    commitMigrationSeries,
-    commitAllCleanMigrationSeries,
-    searchSeries,
-    getLibraryTitles,
-    type MigrationBatchSummary,
-    type MigrationBatchDetail,
-    type MigrationSeriesDetail,
-    type Series,
+      startMigrationScan,
+      getMigrationBatches,
+      getMigrationBatch,
+      setMigrationSeriesMatch,
+      setMigrationMergeTarget,
+      setMigrationItemDisposition,
+      commitMigrationSeries,
+      commitAllCleanMigrationSeries,
+      searchSeries,
+      getLibraryTitles,
+      type MigrationBatchSummary,
+      type MigrationBatchDetail,
+      type MigrationSeriesDetail,
+      type Series, clearMigrationConflict,
   } from '../../lib/api'
   import { notify } from '../../lib/notify'
   import { Button } from '../../lib/components/ui/button/index.js'
@@ -289,7 +289,11 @@
                               class="flex min-w-0 cursor-default flex-col"
                               title={c.altTitles.length ? `Also known as:\n${c.altTitles.join('\n')}` : undefined}
                             >
-                              <span class="truncate">{c.title}</span>
+                              {#if c.siteUrl }
+                                <a target="_blank" href="{c.siteUrl}" class="truncate">{c.title}</a>
+                              {:else}
+                                <span class="truncate">{c.title}</span>
+                              {/if}
                               {#if c.altTitles.length}
                                 <span class="truncate text-[0.72rem] text-text-mute">
                                   aka {c.altTitles[0]}{c.altTitles.length > 1 ? ` (+${c.altTitles.length - 1} more)` : ''}
@@ -311,6 +315,22 @@
                   </label>
 
                   <label class="flex min-w-[16rem] flex-1 flex-col gap-[0.3rem] text-[0.78rem] text-text-dim">
+                      {#if s.status !== 'Committed'}
+                          <Button
+                                  disabled={busy[s.id + ':commit'] || committing}
+                                  onclick={() => act(s.id + ':commit', () => commitMigrationSeries(s.id))}
+                          >
+                              {#if busy[s.id + ':commit'] || committing}<Spinner />{/if}
+                              {busy[s.id + ':commit'] || committing ? 'Committing…' : 'Commit this series'}
+                          </Button>
+                          <Button variant="secondary"
+                                  disabled={busy[s.id + ':commit'] || committing || s.matchedSourceSeriesId == null || s.conflictReason == null}
+                                  onclick={() => act(s.id + ':commit', () => clearMigrationConflict(s.id))}
+                          >
+                              {#if busy[s.id + ':commit'] || committing}<Spinner />{/if}
+                              {busy[s.id + ':commit'] || committing ? 'Committing…' : 'Clear conflict'}
+                          </Button>
+                      {/if}
                     Merge into existing library series (optional)
                     <Select
                       type="single"
@@ -382,6 +402,13 @@
                 >
                   {#if busy[s.id + ':commit'] || committing}<Spinner />{/if}
                   {busy[s.id + ':commit'] || committing ? 'Committing…' : 'Commit this series'}
+                </Button>
+                <Button variant="secondary"
+                  disabled={busy[s.id + ':commit'] || committing || s.matchedSourceSeriesId == null || s.conflictReason == null}
+                  onclick={() => act(s.id + ':commit', () => clearMigrationConflict(s.id))}
+                >
+                  {#if busy[s.id + ':commit'] || committing}<Spinner />{/if}
+                  {busy[s.id + ':commit'] || committing ? 'Committing…' : 'Clear conflict'}
                 </Button>
               {/if}
             </div>

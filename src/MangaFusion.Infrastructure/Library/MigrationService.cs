@@ -325,6 +325,19 @@ public sealed class MigrationService(
         }
     }
 
+    public async Task ClearConflictAsync(Guid migrationSeriesId, CancellationToken ct = default)
+    {
+        var migrationSeries = await LoadSeriesAsync(migrationSeriesId, ct);
+        EnsureNotCommitted(migrationSeries);
+        EnsureHasMatchingSeries(migrationSeries);
+
+        migrationSeries.ConflictReason = null;
+        await db.SaveChangesAsync(ct);
+        logger.LogDebug(
+            "Migration review: series {SeriesId} cleared for commit.",
+            migrationSeriesId);
+    }
+
     private static bool IsClean(MigrationSeries series) =>
         series.ConflictReason is null && series.Regime != MigrationRegime.Unmatched;
 
@@ -487,6 +500,14 @@ public sealed class MigrationService(
         if (series.Status == MigrationSeriesStatus.Committed)
         {
             throw new InvalidOperationException("This series has already been committed.");
+        }
+    }
+
+    private static void EnsureHasMatchingSeries(MigrationSeries series)
+    {
+        if (series.MatchedSourceSeriesId == null)
+        {
+            throw new InvalidOperationException("This entry has no matching source series id.");
         }
     }
 
