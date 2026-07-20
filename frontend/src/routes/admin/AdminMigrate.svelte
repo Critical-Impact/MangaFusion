@@ -10,6 +10,7 @@
       setMigrationItemDisposition,
       commitMigrationSeries,
       commitAllCleanMigrationSeries,
+      clearRankingConflicts,
       searchSeries,
       getLibraryTitles,
       type MigrationBatchSummary,
@@ -18,6 +19,7 @@
       type Series, clearMigrationConflict,
   } from '../../lib/api'
   import { notify } from '../../lib/notify'
+  import { progressByMigrationSeries, progressByMigrationBatch } from '../../lib/signalr.svelte'
   import { Button } from '../../lib/components/ui/button/index.js'
   import { Input } from '../../lib/components/ui/input/index.js'
   import { Checkbox } from '../../lib/components/ui/checkbox/index.js'
@@ -156,8 +158,39 @@
       ? batch.series.filter((s) => s.status === 'NeedsReview' && !s.conflictReason && s.regime !== 'Unmatched').length
       : 0,
   )
+  let rankingOnlyCount = $derived(
+    batch ? batch.series.filter((s) => s.status !== 'Committed' && s.hasRankingOnlyConflict).length : 0,
+  )
   // A background commit is in flight for this batch — block starting another one (or a scan) meanwhile.
   let committing = $derived(batch?.status === 'Committing')
+
+  // Prefers the live SignalR push over the series' own persisted progress fields (polling picks
+  // those up after a page refresh/reconnect); null when this series has no commit in flight.
+  function progressFor(s: MigrationSeriesDetail) {
+    const live = progressByMigrationSeries[s.id]
+    if (live && live.status === 'Committing') {
+      return { itemsDone: live.itemsDone, itemsTotal: live.itemsTotal }
+    }
+    if (s.commitItemsTotal != null) {
+      return { itemsDone: s.commitItemsDone ?? 0, itemsTotal: s.commitItemsTotal }
+    }
+    return null
+  }
+
+  function batchProgress(b: MigrationBatchDetail) {
+    const live = progressByMigrationBatch[b.id]
+    if (live) return { seriesDone: live.seriesDone, seriesTotal: live.seriesTotal }
+    if (b.commitSeriesTotal != null) return { seriesDone: b.commitSeriesDone ?? 0, seriesTotal: b.commitSeriesTotal }
+    return null
+  }
+
+  async function clearRankingOnly() {
+    if (!batch) return
+    await act('clear-ranking', async () => {
+      const { clearedCount } = await clearRankingConflicts(batch!.id)
+      notify.success(clearedCount > 0 ? `Cleared ${clearedCount} ranking-only conflict(s).` : 'No matching conflicts to clear.')
+    })
+  }
 
   async function commitAllClean() {
     if (!batch) return
@@ -222,11 +255,34 @@
       </p>
     {/if}
 
-    {#if readyCount > 0}
-      <Button variant="secondary" onclick={commitAllClean} disabled={busy['commit-all'] || committing}>
-        {#if busy['commit-all'] || committing}<Spinner />{/if}
-        {busy['commit-all'] || committing ? 'Committing…' : `Commit all clean matches (${readyCount})`}
-      </Button>
+    <section class="flex flex-wrap items-center gap-[0.6rem]">
+      {#if readyCount > 0}
+        <Button variant="secondary" onclick={commitAllClean} disabled={busy['commit-all'] || committing}>
+          {#if busy['commit-all'] || committing}<Spinner />{/if}
+          {busy['commit-all'] || committing ? 'Committing…' : `Commit all clean matches (${readyCount})`}
+        </Button>
+      {/if}
+      {#if rankingOnlyCount > 0}
+        <Button variant="secondary" onclick={clearRankingOnly} disabled={busy['clear-ranking'] || committing}>
+          {#if busy['clear-ranking']}<Spinner />{/if}
+          {busy['clear-ranking'] ? 'Clearing…' : `Clear ranking-only conflicts (${rankingOnlyCount})`}
+        </Button>
+      {/if}
+    </section>
+
+    {#if committing}
+      {@const bp = batchProgress(batch)}
+      {#if bp && bp.seriesTotal > 0}
+        <div class="flex flex-col gap-[0.3rem] text-[0.8rem] text-text-dim">
+          <span>Committing — series {bp.seriesDone}/{bp.seriesTotal}</span>
+          <div class="h-[0.4rem] w-full overflow-hidden rounded-full bg-border">
+            <div
+              class="h-full bg-brand-soft transition-[width] duration-300"
+              style={`width: ${Math.round((bp.seriesDone / bp.seriesTotal) * 100)}%`}
+            ></div>
+          </div>
+        </div>
+      {/if}
     {/if}
 
     {#if batch.series.length === 0 && batch.status !== 'Scanning'}
@@ -256,6 +312,20 @@
           {#if expanded[s.id]}
             <div class="flex flex-col gap-[0.7rem] border-t border-border-dim px-[0.9rem] py-[0.8rem]">
               {#if s.conflictReason}<p class="m-0 text-[0.85rem] text-warn">{s.conflictReason}</p>{/if}
+              {#if committing}
+                {@const p = progressFor(s)}
+                {#if p && p.itemsTotal > 0}
+                  <div class="flex flex-col gap-[0.3rem] text-[0.8rem] text-text-dim">
+                    <span>Committing — item {p.itemsDone}/{p.itemsTotal}</span>
+                    <div class="h-[0.4rem] w-full overflow-hidden rounded-full bg-border">
+                      <div
+                        class="h-full bg-brand-soft transition-[width] duration-300"
+                        style={`width: ${Math.round((p.itemsDone / p.itemsTotal) * 100)}%`}
+                      ></div>
+                    </div>
+                  </div>
+                {/if}
+              {/if}
               {#if s.committedLibrarySeriesId}
                 <a class="text-[0.8rem] text-brand-soft no-underline" href={`/library/${s.committedLibrarySeriesId}`} use:link>
                   Open in library ↗

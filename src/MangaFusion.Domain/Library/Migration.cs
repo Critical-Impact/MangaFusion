@@ -30,6 +30,33 @@ public enum MigrationSeriesStatus
     Failed = 3,
 }
 
+/// <summary>Which independent review conditions flagged a <see cref="MigrationSeries"/> — a series
+/// can trip several of these at once, which is why this is a bit-flag set rather than a single
+/// reason: it lets bulk actions (e.g. "clear ranking-only conflicts") target series where exactly
+/// one specific condition applies, without parsing <see cref="MigrationSeries.ConflictReason"/>'s
+/// free text.</summary>
+[Flags]
+public enum MigrationConflictKind
+{
+    None = 0,
+
+    /// <summary>Regime is <see cref="MigrationRegime.Mixed"/> — some local chapters weren't found in
+    /// the source feed, so scanlation-group ranking may be based on incomplete data.</summary>
+    PartialPurgeRanking = 1,
+
+    /// <summary>One or more files' UUID prefixes matched multiple feed chapters — held as
+    /// <see cref="MigrationItemDisposition.Unresolved"/> pending manual resolution.</summary>
+    AmbiguousItems = 2,
+
+    /// <summary>Multiple local copies of a chapter had no group data to rank them; a best guess was
+    /// pre-selected.</summary>
+    HeuristicTie = 4,
+
+    /// <summary>No chapter 1 (or 0) found locally or on the source — this series may be starting
+    /// mid-run.</summary>
+    MissingOpener = 8,
+}
+
 public enum MigrationItemDisposition
 {
     /// <summary>Not yet classified (scan in progress).</summary>
@@ -64,6 +91,12 @@ public class MigrationBatch
     /// the CBZ migration tool matches against MangaDex and dedups by scanlation group — but carried so
     /// batches stay filterable alongside the import wizard's.</summary>
     public MediaKind Kind { get; set; } = MediaKind.Manga;
+
+    // --- Bulk-commit progress (while Status == Committing via RunCommitAllCleanAsync) — persisted
+    // periodically as a durable fallback for the live SignalR push; polling picks these up after a
+    // page refresh/reconnect. Null outside of a bulk commit (a single-series commit doesn't set these). ---
+    public int? CommitSeriesDone { get; set; }
+    public int? CommitSeriesTotal { get; set; }
 
     /// <summary>Folder names moved into the import wizard's inbox instead of being scanned as
     /// migration candidates, because none of their files had a ComicInfo.xml — almost certainly not
@@ -104,6 +137,17 @@ public class MigrationSeries
 
     /// <summary>Human-readable reason this series is held for review; null once clear.</summary>
     public string? ConflictReason { get; set; }
+
+    /// <summary>Structured form of <see cref="ConflictReason"/> — which review condition(s) are
+    /// currently set. Kept in sync with it (both cleared/set together); lets bulk actions target an
+    /// exact condition instead of parsing the free-text reason.</summary>
+    public MigrationConflictKind ConflictKind { get; set; } = MigrationConflictKind.None;
+
+    // --- Per-series commit progress (while a commit is running) — persisted periodically as a
+    // durable fallback for the live SignalR push; polling picks these up after a page refresh/
+    // reconnect. Null outside of an in-flight commit. ---
+    public int? CommitItemsDone { get; set; }
+    public int? CommitItemsTotal { get; set; }
 
     /// <summary>An existing library series to merge into instead of creating a new one. Its own
     /// metadata is never overwritten by the migration — only chapters/files are added.</summary>

@@ -19,6 +19,7 @@ public static class MigrationEndpoints
         group.MapPost("/series/{id:guid}/commit", CommitSeries);
         group.MapPost("/batches/{id:guid}/commit-clean", CommitAllClean);
         group.MapPost("/series/{id:guid}/clear-conflict", ClearConflict);
+        group.MapPost("/batches/{id:guid}/clear-ranking-conflicts", ClearRankingConflicts);
     }
 
     private static async Task<IResult> StartScan(IMigrationService migration, CancellationToken ct)
@@ -116,6 +117,12 @@ public static class MigrationEndpoints
         {
             return Results.BadRequest(new { error = ex.Message });
         }
+    }
+
+    private static async Task<IResult> ClearRankingConflicts(Guid id, IMigrationService migration, CancellationToken ct)
+    {
+        var clearedCount = await migration.ClearRankingOnlyConflictsAsync(id, ct);
+        return Results.Ok(new { clearedCount });
     }
 
     private sealed record SetMatchRequest(string? SourceSeriesId);

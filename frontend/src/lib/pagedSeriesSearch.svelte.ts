@@ -86,6 +86,9 @@ export class PagedSeriesSearch<T> {
     const capped = this.#opts.maxResults ? Math.min(this.total, this.#opts.maxResults) : this.total
     return Math.max(1, Math.ceil(capped / this.#opts.pageSize))
   }
+  get pageSize(): number {
+    return this.#opts.pageSize
+  }
   get exceedsMaxResults(): boolean {
     return this.#opts.maxResults != null && this.total > this.#opts.maxResults
   }

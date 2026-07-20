@@ -187,6 +187,13 @@ public class ImportCommitterResumeTests : IDisposable
             Guid importSeriesId, string status, int itemsDone, int itemsTotal, int? pageDone, int? pageTotal,
             CancellationToken ct = default) => Task.CompletedTask;
 
+        public Task MigrationCommitProgressAsync(
+            Guid migrationSeriesId, string status, int itemsDone, int itemsTotal, CancellationToken ct = default) =>
+            Task.CompletedTask;
+
+        public Task MigrationBatchCommitProgressAsync(
+            Guid batchId, int seriesDone, int seriesTotal, CancellationToken ct = default) => Task.CompletedTask;
+
         public Task NotificationAsync(Guid userId, string title, string? body, CancellationToken ct = default) =>
             Task.CompletedTask;
     }

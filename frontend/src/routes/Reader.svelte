@@ -349,7 +349,7 @@
         break
       case 'n': nextChapter(); break
       case 'p': prevChapter(); break
-      case 'f': toggleFit(); break
+      case 'f': if (mode === 'paged') toggleFit(); break
       case 'w': toggleMode(); break
       case '?': showHelp = !showHelp; break
       case 'Escape': showHelp ? (showHelp = false) : exit(); break
@@ -382,6 +382,23 @@
   $effect(() => {
     page
     if (mode === 'paged' && stageEl) stageEl.scrollTop = 0
+  })
+
+  // fit:'height' needs the page's max-height to resolve against a hard pixel value: a CSS
+  // `height: 100%` cascaded through this flex-item-that-also-scrolls ancestor can silently fail to
+  // resolve on some (particularly mobile) browsers, which makes max-height a no-op and leaves the
+  // image constrained only by max-width — indistinguishable from fit:'width'. Tracking the stage's
+  // real height in JS and applying it as an explicit inline style sidesteps that percentage-height
+  // quirk entirely.
+  let stagePx = $state(0)
+  $effect(() => {
+    if (mode !== 'paged' || !stageEl) return
+    stagePx = stageEl.clientHeight
+    const ro = new ResizeObserver((entries) => {
+      for (const entry of entries) stagePx = entry.contentRect.height
+    })
+    ro.observe(stageEl)
+    return () => ro.disconnect()
   })
 
   // Webtoon mode: track the centered page for progress, and scroll to the resume page once.
@@ -459,8 +476,8 @@
       <span class="flex-1"></span>
       <span class="text-[0.8rem] text-text-dim tabular-nums">{page + 1} / {manifest.pageCount}</span>
       <button class={icoClass(mode === 'webtoon')} onclick={toggleMode} title="Toggle webtoon (w)">☰</button>
-      <button class={icoClass()} onclick={toggleFit} title="Fit width/height (f)">{fit === 'width' ? '↔' : '↕'}</button>
       {#if mode === 'paged'}
+        <button class={icoClass()} onclick={toggleFit} title="Fit width/height (f)">{fit === 'width' ? '↔' : '↕'}</button>
         <button class={icoClass()} onclick={toggleDirection} title="Reading direction">{direction === 'rtl' ? 'RTL' : 'LTR'}</button>
       {/if}
       <button class={icoClass(isFullscreen)} onclick={toggleFullscreen} title="Toggle fullscreen">⛶</button>
@@ -471,8 +488,8 @@
       <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
       <div class="min-h-0 flex-1 overflow-x-hidden overflow-y-auto" bind:this={stageEl} onclick={onTap}>
         <div
-          class="grid h-full place-items-center [grid-template-columns:1fr] [grid-template-rows:1fr]"
-          style={fit === 'width' ? 'align-items: start; align-items: safe center;' : ''}
+          class="grid place-items-center [grid-template-columns:1fr] [grid-template-rows:1fr]"
+          style={`height: ${stagePx}px;${fit === 'width' ? ' align-items: start; align-items: safe center;' : ''}`}
         >
           {#key page}
             <img

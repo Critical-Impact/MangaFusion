@@ -35,7 +35,8 @@ public sealed record MatchResult(
     double Confidence,
     IReadOnlyList<string> GroupRanking,
     IReadOnlyList<MatchedItem> Items,
-    string? ConflictReason);
+    string? ConflictReason,
+    MigrationConflictKind ConflictKind = MigrationConflictKind.None);
 
 /// <summary>Matches one scanned inbox folder against MangaDex: picks the series by title/alt-title
 /// similarity, resolves each local file to a feed chapter by its UUID-prefix, detects whether the
@@ -151,32 +152,37 @@ public sealed class MigrationMatcher(ISourceRegistry registry, ILogger<Migration
         var missingOpener = IsMissingOpeningChapter(folder.Files, feed);
 
         var reasons = new List<string>();
+        var conflictKind = MigrationConflictKind.None;
         if (regime == MigrationRegime.Mixed)
         {
             reasons.Add($"Series is partially purged from MangaDex ({confidence:P0} of local chapters still " +
                         "found in the feed) — group ranking may be incomplete.");
+            conflictKind |= MigrationConflictKind.PartialPurgeRanking;
         }
 
         if (hasAmbiguous)
         {
             reasons.Add("One or more files' UUID prefixes matched multiple feed chapters — resolve manually.");
+            conflictKind |= MigrationConflictKind.AmbiguousItems;
         }
 
         if (hadHeuristicTies)
         {
             reasons.Add("Some chapters had multiple local copies with no group data to rank them; a best " +
                         "guess (most pages, then title) was pre-selected — review before committing.");
+            conflictKind |= MigrationConflictKind.HeuristicTie;
         }
 
         if (missingOpener)
         {
             reasons.Add("No chapter 1 (or 0) found locally or on MangaDex — this series may be starting " +
                         "mid-run; check whether earlier chapters exist before importing.");
+            conflictKind |= MigrationConflictKind.MissingOpener;
         }
 
         return new MatchResult(
             comicInfoTitle, SourceId, sourceSeriesId, matchedTitle, regime, confidence,
-            groupRanking, deduped, reasons.Count == 0 ? null : string.Join(" ", reasons));
+            groupRanking, deduped, reasons.Count == 0 ? null : string.Join(" ", reasons), conflictKind);
     }
 
     /// <summary>True when the local files use numbered chapters at all but neither a usable local

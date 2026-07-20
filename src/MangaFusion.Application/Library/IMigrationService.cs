@@ -26,14 +26,20 @@ public sealed record MigrationSeriesDetail(
     double Confidence,
     string Status,
     string? ConflictReason,
+    /// <summary>True when the series' <em>only</em> flagged condition is the partial-purge ranking
+    /// one — the target set for <see cref="IMigrationService.ClearRankingOnlyConflictsAsync"/>.</summary>
+    bool HasRankingOnlyConflict,
     Guid? ExistingLibrarySeriesId,
     Guid? CommittedLibrarySeriesId,
     IReadOnlyList<string> GroupRanking,
-    IReadOnlyList<MigrationItemDetail> Items);
+    IReadOnlyList<MigrationItemDetail> Items,
+    int? CommitItemsDone,
+    int? CommitItemsTotal);
 
 public sealed record MigrationBatchDetail(
     Guid Id, DateTimeOffset CreatedAt, string Status, string? Error,
-    IReadOnlyList<string> DivertedFolders, IReadOnlyList<MigrationSeriesDetail> Series);
+    IReadOnlyList<string> DivertedFolders, IReadOnlyList<MigrationSeriesDetail> Series,
+    int? CommitSeriesDone, int? CommitSeriesTotal);
 
 /// <summary>Migrates CBZ files from an old (non-MangaFusion) downloader's inbox layout — one
 /// subfolder per series, one file per chapter — into the library. Scans + matches against MangaDex
@@ -93,4 +99,10 @@ public interface IMigrationService
 
     /// <summary>Clears the conflict status on a series that is to be migrated.</summary>
     Task ClearConflictAsync(Guid migrationSeriesId, CancellationToken ct = default);
+
+    /// <summary>Batch-clears the conflict on every not-yet-committed series in the batch whose only
+    /// flagged condition is the partial-purge ranking one (see <see cref="MigrationSeriesDetail.HasRankingOnlyConflict"/>).
+    /// Series with any other flagged condition (ambiguous items, etc.) are left untouched, since those
+    /// still need manual review. Returns how many series were cleared.</summary>
+    Task<int> ClearRankingOnlyConflictsAsync(Guid batchId, CancellationToken ct = default);
 }

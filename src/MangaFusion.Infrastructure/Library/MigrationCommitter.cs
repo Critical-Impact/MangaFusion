@@ -1,5 +1,6 @@
 using System.IO.Compression;
 using MangaFusion.Application.Library;
+using MangaFusion.Application.Realtime;
 using MangaFusion.Application.Sources;
 using MangaFusion.Application.Writing;
 using MangaFusion.Contracts.Sources;
@@ -23,7 +24,8 @@ namespace MangaFusion.Infrastructure.Library;
 public sealed class MigrationCommitter(
     AppDbContext db, ISourceRegistry registry, ChapterImporter importer, LibraryPaths paths,
     MigrationPaths migrationPaths, SeriesMetadataApplier metadataApplier, SeriesCoverCache coverCache,
-    ArtifactFileInspector artifactInspector, ArtifactPageReencoder reencoder, ILogger<MigrationCommitter> logger)
+    ArtifactFileInspector artifactInspector, ArtifactPageReencoder reencoder, ILibraryNotifier notifier,
+    ILogger<MigrationCommitter> logger)
 {
     private const int FeedPageSize = 500;
     private const int MaxFeedPages = 20;
@@ -75,14 +77,27 @@ public sealed class MigrationCommitter(
 
         await db.SaveChangesAsync(ct); // chapters/releases must exist before we can point artifacts at them
 
+        var winners = migrationSeries.Items.Where(i => i.Disposition == MigrationItemDisposition.Import).ToList();
+        var itemsDone = 0;
+        var itemsTotal = winners.Count;
+        migrationSeries.CommitItemsDone = itemsDone;
+        migrationSeries.CommitItemsTotal = itemsTotal;
+        await db.SaveChangesAsync(ct);
+        await ReportAsync(migrationSeries.Id, itemsDone, itemsTotal, ct);
+
         var pendingActivePointers = new List<(Chapter Chapter, Artifact Artifact, ChapterRelease Release)>();
-        foreach (var item in migrationSeries.Items.Where(i => i.Disposition == MigrationItemDisposition.Import))
+        foreach (var item in winners)
         {
             var pointer = await ImportWinnerAsync(series, migrationSeries, item, ct);
             if (pointer is not null)
             {
                 pendingActivePointers.Add(pointer.Value);
             }
+
+            itemsDone++;
+            migrationSeries.CommitItemsDone = itemsDone;
+            await db.SaveChangesAsync(ct);
+            await ReportAsync(migrationSeries.Id, itemsDone, itemsTotal, ct);
         }
 
         foreach (var item in migrationSeries.Items.Where(i =>
@@ -106,12 +121,29 @@ public sealed class MigrationCommitter(
         migrationSeries.Status = MigrationSeriesStatus.Committed;
         migrationSeries.CommittedLibrarySeriesId = series.Id;
         migrationSeries.ConflictReason = null;
+        migrationSeries.ConflictKind = MigrationConflictKind.None;
+        migrationSeries.CommitItemsDone = null;
+        migrationSeries.CommitItemsTotal = null;
         await db.SaveChangesAsync(ct);
+        await ReportAsync(migrationSeries.Id, itemsTotal, itemsTotal, ct, "Committed");
         logger.LogDebug("Migration commit: {Folder} committed to series {SeriesId}.", migrationSeries.FolderName, series.Id);
 
         RemoveInboxFolderIfEmpty(migrationSeries.FolderName);
 
         return series.Id;
+    }
+
+    private async Task ReportAsync(
+        Guid migrationSeriesId, int itemsDone, int itemsTotal, CancellationToken ct, string status = "Committing")
+    {
+        try
+        {
+            await notifier.MigrationCommitProgressAsync(migrationSeriesId, status, itemsDone, itemsTotal, ct);
+        }
+        catch
+        {
+            // Live progress is best-effort — the periodic DB persist above is the durable fallback.
+        }
     }
 
     /// <summary>Every file is either imported or moved to the outbox by this point — if that leaves

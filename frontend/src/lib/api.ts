@@ -770,10 +770,13 @@ export interface MigrationSeriesDetail {
   confidence: number
   status: string
   conflictReason: string | null
+  hasRankingOnlyConflict: boolean
   existingLibrarySeriesId: string | null
   committedLibrarySeriesId: string | null
   groupRanking: string[]
   items: MigrationItemDetail[]
+  commitItemsDone: number | null
+  commitItemsTotal: number | null
 }
 
 export interface MigrationBatchDetail {
@@ -783,6 +786,8 @@ export interface MigrationBatchDetail {
   error: string | null
   divertedFolders: string[]
   series: MigrationSeriesDetail[]
+  commitSeriesDone: number | null
+  commitSeriesTotal: number | null
 }
 
 export interface MigrationBatchSummary {
@@ -818,6 +823,9 @@ export const clearMigrationConflict = (seriesId: string) =>
 
 export const commitAllCleanMigrationSeries = (batchId: string) =>
   send<void>(`/api/migration/batches/${batchId}/commit-clean`, 'POST', {})
+
+export const clearRankingConflicts = (batchId: string) =>
+  send<{ clearedCount: number }>(`/api/migration/batches/${batchId}/clear-ranking-conflicts`, 'POST', {})
 
 // --- MangaUpdates import wizard ------------------------------------------------------------------
 

@@ -17,6 +17,19 @@ export interface ImportCommitProgress {
   pageTotal: number | null
 }
 
+export interface MigrationCommitProgress {
+  migrationSeriesId: string
+  status: string
+  itemsDone: number
+  itemsTotal: number
+}
+
+export interface MigrationBatchCommitProgress {
+  batchId: string
+  seriesDone: number
+  seriesTotal: number
+}
+
 // Reactive map of live download progress keyed by downloadId (and mirrored by chapterId for the
 // series view). Populated from the SignalR hub.
 export const progressByDownload = $state<Record<string, DownloadProgress>>({})
@@ -24,6 +37,10 @@ export const progressByChapter = $state<Record<string, DownloadProgress>>({})
 
 // Reactive map of live import-wizard commit progress, keyed by import series id.
 export const progressByImportSeries = $state<Record<string, ImportCommitProgress>>({})
+
+// Reactive maps of live migration commit progress, keyed by migration series id / batch id.
+export const progressByMigrationSeries = $state<Record<string, MigrationCommitProgress>>({})
+export const progressByMigrationBatch = $state<Record<string, MigrationBatchCommitProgress>>({})
 
 // Bumped whenever a new notification arrives, so the bell can refetch.
 export const realtime = $state<{ notificationTick: number }>({ notificationTick: 0 })
@@ -47,6 +64,14 @@ export async function startSignalR(): Promise<void> {
 
   connection.on('importCommitProgress', (msg: ImportCommitProgress) => {
     progressByImportSeries[msg.importSeriesId] = msg
+  })
+
+  connection.on('migrationCommitProgress', (msg: MigrationCommitProgress) => {
+    progressByMigrationSeries[msg.migrationSeriesId] = msg
+  })
+
+  connection.on('migrationBatchCommitProgress', (msg: MigrationBatchCommitProgress) => {
+    progressByMigrationBatch[msg.batchId] = msg
   })
 
   connection.on('notification', () => {

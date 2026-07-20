@@ -17,6 +17,16 @@ public interface ILibraryNotifier
         Guid importSeriesId, string status, int itemsDone, int itemsTotal, int? pageDone, int? pageTotal,
         CancellationToken ct = default);
 
+    /// <summary>Live progress for one migration series' commit — <paramref name="itemsDone"/>/
+    /// <paramref name="itemsTotal"/> count the winning files being moved into the library.</summary>
+    Task MigrationCommitProgressAsync(
+        Guid migrationSeriesId, string status, int itemsDone, int itemsTotal, CancellationToken ct = default);
+
+    /// <summary>Live progress for a "commit all clean matches" bulk run — <paramref name="seriesDone"/>/
+    /// <paramref name="seriesTotal"/> count series committed so far in the batch.</summary>
+    Task MigrationBatchCommitProgressAsync(
+        Guid batchId, int seriesDone, int seriesTotal, CancellationToken ct = default);
+
     /// <summary>Pushes a new-notification signal to a specific user so their bell updates live.</summary>
     Task NotificationAsync(Guid userId, string title, string? body, CancellationToken ct = default);
 }

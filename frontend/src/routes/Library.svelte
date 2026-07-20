@@ -143,6 +143,13 @@
         </PosterCard>
       {/each}
     </div>
-    <Pager page={search.page} totalPages={search.totalPages} onprev={() => search.go(-1)} onnext={() => search.go(1)} />
+    <Pager
+      page={search.page}
+      totalPages={search.totalPages}
+      total={search.total}
+      pageSize={search.pageSize}
+      onprev={() => search.go(-1)}
+      onnext={() => search.go(1)}
+    />
   {/if}
 </section>

@@ -1,5 +1,6 @@
 using Hangfire;
 using MangaFusion.Application.Library;
+using MangaFusion.Application.Realtime;
 using MangaFusion.Domain.Library;
 using MangaFusion.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
@@ -15,6 +16,7 @@ public sealed class MigrationService(
     MigrationCommitter committer,
     MigrationScanner scanner,
     IBackgroundJobClient jobs,
+    ILibraryNotifier notifier,
     ILogger<MigrationService> logger) : IMigrationService
 {
     public async Task<Guid> StartScanAsync(CancellationToken ct = default)
@@ -131,6 +133,7 @@ public sealed class MigrationService(
 
             migrationSeries.Status = MigrationSeriesStatus.NeedsReview;
             migrationSeries.ConflictReason = "Match cleared; pick a MangaDex series.";
+            migrationSeries.ConflictKind = MigrationConflictKind.None;
         }
         else
         {
@@ -238,6 +241,8 @@ public sealed class MigrationService(
         {
             migrationSeries.Status = MigrationSeriesStatus.Failed;
             migrationSeries.ConflictReason = $"Commit failed: {ex.Message}";
+            migrationSeries.CommitItemsDone = null;
+            migrationSeries.CommitItemsTotal = null;
             logger.LogError(ex, "Migration commit failed for series {SeriesId} ({Folder}).",
                 migrationSeries.Id, migrationSeries.FolderName);
         }
@@ -283,7 +288,15 @@ public sealed class MigrationService(
                 .Where(s => s.BatchId == batchId && s.Status == MigrationSeriesStatus.NeedsReview)
                 .ToListAsync(ct);
 
-            foreach (var series in candidates.Where(IsClean))
+            var clean = candidates.Where(IsClean).ToList();
+            var seriesDone = 0;
+            var seriesTotal = clean.Count;
+            batch.CommitSeriesDone = seriesDone;
+            batch.CommitSeriesTotal = seriesTotal;
+            await db.SaveChangesAsync(ct);
+            await ReportBatchProgressAsync(batchId, seriesDone, seriesTotal, ct);
+
+            foreach (var series in clean)
             {
                 ct.ThrowIfCancellationRequested();
                 try
@@ -298,14 +311,21 @@ public sealed class MigrationService(
                 {
                     series.Status = MigrationSeriesStatus.Failed;
                     series.ConflictReason = $"Bulk commit failed: {ex.Message}";
+                    series.CommitItemsDone = null;
+                    series.CommitItemsTotal = null;
                     logger.LogError(ex, "Migration bulk commit failed for series {SeriesId} ({Folder}).",
                         series.Id, series.FolderName);
                 }
 
+                seriesDone++;
+                batch.CommitSeriesDone = seriesDone;
                 await db.SaveChangesAsync(ct);
+                await ReportBatchProgressAsync(batchId, seriesDone, seriesTotal, ct);
             }
 
             batch.Status = MigrationBatchStatus.Done;
+            batch.CommitSeriesDone = null;
+            batch.CommitSeriesTotal = null;
             await db.SaveChangesAsync(ct);
         }
         catch (OperationCanceledException)
@@ -313,6 +333,8 @@ public sealed class MigrationService(
             // Interrupted (shutdown): reset to Done so the batch stays reviewable/retryable rather than
             // stuck in Committing; already-committed series keep their status, the rest stay NeedsReview.
             batch.Status = MigrationBatchStatus.Done;
+            batch.CommitSeriesDone = null;
+            batch.CommitSeriesTotal = null;
             await db.SaveChangesAsync(CancellationToken.None);
             throw;
         }
@@ -320,8 +342,22 @@ public sealed class MigrationService(
         {
             batch.Status = MigrationBatchStatus.Failed;
             batch.Error = ex.Message;
+            batch.CommitSeriesDone = null;
+            batch.CommitSeriesTotal = null;
             logger.LogError(ex, "Migration bulk commit failed for batch {BatchId}.", batchId);
             await db.SaveChangesAsync(CancellationToken.None);
+        }
+    }
+
+    private async Task ReportBatchProgressAsync(Guid batchId, int seriesDone, int seriesTotal, CancellationToken ct)
+    {
+        try
+        {
+            await notifier.MigrationBatchCommitProgressAsync(batchId, seriesDone, seriesTotal, ct);
+        }
+        catch
+        {
+            // Live progress is best-effort — the periodic DB persist above is the durable fallback.
         }
     }
 
@@ -332,10 +368,36 @@ public sealed class MigrationService(
         EnsureHasMatchingSeries(migrationSeries);
 
         migrationSeries.ConflictReason = null;
+        migrationSeries.ConflictKind = MigrationConflictKind.None;
         await db.SaveChangesAsync(ct);
         logger.LogDebug(
             "Migration review: series {SeriesId} cleared for commit.",
             migrationSeriesId);
+    }
+
+    /// <summary>Batch-clears the conflict on every not-yet-committed series in a batch whose <em>only</em>
+    /// flagged condition is the partial-purge ranking one — leaves series that also have ambiguous
+    /// items, heuristic ties, or a missing opener untouched, since those still need manual review.
+    /// Returns how many series were cleared.</summary>
+    public async Task<int> ClearRankingOnlyConflictsAsync(Guid batchId, CancellationToken ct = default)
+    {
+        var targets = await db.MigrationSeries
+            .Where(s => s.BatchId == batchId
+                        && s.Status != MigrationSeriesStatus.Committed
+                        && s.ConflictKind == MigrationConflictKind.PartialPurgeRanking)
+            .ToListAsync(ct);
+
+        foreach (var series in targets)
+        {
+            series.ConflictReason = null;
+            series.ConflictKind = MigrationConflictKind.None;
+        }
+
+        await db.SaveChangesAsync(ct);
+        logger.LogDebug(
+            "Migration review: cleared {Count} ranking-only conflict(s) in batch {BatchId}.",
+            targets.Count, batchId);
+        return targets.Count;
     }
 
     private static bool IsClean(MigrationSeries series) =>
@@ -396,6 +458,7 @@ public sealed class MigrationService(
         migrationSeries.Confidence = match.Confidence;
         migrationSeries.GroupRanking = match.GroupRanking.ToList();
         migrationSeries.ConflictReason = match.ConflictReason;
+        migrationSeries.ConflictKind = match.ConflictKind;
 
         migrationSeries.Items.Clear();
         foreach (var item in match.Items)
@@ -513,13 +576,16 @@ public sealed class MigrationService(
 
     private static MigrationBatchDetail ToDetail(MigrationBatch batch) => new(
         batch.Id, batch.CreatedAt, batch.Status.ToString(), batch.Error,
-        batch.DivertedFolders, batch.Series.Select(ToDetail).ToList());
+        batch.DivertedFolders, batch.Series.Select(ToDetail).ToList(),
+        batch.CommitSeriesDone, batch.CommitSeriesTotal);
 
     private static MigrationSeriesDetail ToDetail(MigrationSeries s) => new(
         s.Id, s.FolderName, s.ComicInfoSeriesTitle, s.MatchedSourceSeriesId, s.MatchedTitle,
         s.Regime.ToString(), s.Confidence, s.Status.ToString(), s.ConflictReason,
+        s.ConflictKind == MigrationConflictKind.PartialPurgeRanking,
         s.ExistingLibrarySeriesId, s.CommittedLibrarySeriesId, s.GroupRanking,
-        s.Items.OrderBy(i => i.FileName, StringComparer.OrdinalIgnoreCase).Select(ToDetail).ToList());
+        s.Items.OrderBy(i => i.FileName, StringComparer.OrdinalIgnoreCase).Select(ToDetail).ToList(),
+        s.CommitItemsDone, s.CommitItemsTotal);
 
     private static MigrationItemDetail ToDetail(MigrationItem i) => new(
         i.Id, i.FileName, i.UuidPrefix, i.Number, i.ChapterTitle, i.PageCount, i.SizeBytes,
