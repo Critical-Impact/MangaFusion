@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Security.Claims;
 using Hangfire;
 using MangaFusion.Application.Settings;
@@ -20,6 +21,9 @@ public static class AdminEndpoints
 
         group.MapGet("/settings", GetSettings);
         group.MapPut("/settings", PutSettings);
+
+        group.MapPost("/system/shutdown", Shutdown);
+        group.MapPost("/system/restart", Restart);
 
         group.MapGet("/users", ListUsers);
         group.MapPost("/users", CreateUser);
@@ -104,6 +108,65 @@ public static class AdminEndpoints
         var e = await settings.GetEffectiveAsync(ct);
         return new SettingsDto(
             e.MonitorCron, e.DefaultLanguages, e.DefaultGraceDays, e.AllowSelfRegistration, e.MinimumLogLevel);
+    }
+
+    // --- Process control (desktop mode only) ------------------------------------------------------
+    // Rejected outright when running under Docker/Kubernetes: the container orchestrator already owns
+    // the process lifecycle, and the frontend hides the menu entirely in that mode, so a request here
+    // means either a stale desktop client or a direct API call — neither should be honored.
+
+    private static IResult Shutdown(DesktopMode mode, IHostApplicationLifetime lifetime)
+    {
+        if (!mode.IsDesktop)
+        {
+            return Results.BadRequest(new { error = "Shutdown is only available in the standalone desktop build." });
+        }
+
+        // Stop after the response has had a moment to reach the client, rather than racing it.
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(300));
+            lifetime.StopApplication();
+        });
+        return Results.Ok(new { });
+    }
+
+    private static IResult Restart(DesktopMode mode, IHostApplicationLifetime lifetime)
+    {
+        if (!mode.IsDesktop)
+        {
+            return Results.BadRequest(new { error = "Restart is only available in the standalone desktop build." });
+        }
+
+        var processPath = Environment.ProcessPath;
+        if (processPath is null)
+        {
+            return Results.Problem("Could not determine the running executable to relaunch.");
+        }
+
+        var psi = new ProcessStartInfo(processPath)
+        {
+            UseShellExecute = false,
+            WorkingDirectory = Environment.CurrentDirectory,
+        };
+
+        // `dotnet MangaFusion.Web.dll` runs through the muxer: ProcessPath is `dotnet`, and argv[0] is
+        // the managed dll path, which must be replayed. A published apphost's argv[0] is itself, so
+        // it's skipped and only the real arguments after it are replayed.
+        var cmdArgs = Environment.GetCommandLineArgs();
+        var isMuxer = Path.GetFileNameWithoutExtension(processPath).Equals("dotnet", StringComparison.OrdinalIgnoreCase);
+        for (var i = isMuxer ? 0 : 1; i < cmdArgs.Length; i++)
+        {
+            psi.ArgumentList.Add(cmdArgs[i]);
+        }
+
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(300));
+            Process.Start(psi);
+            lifetime.StopApplication();
+        });
+        return Results.Ok(new { });
     }
 
     // --- User administration ---------------------------------------------------------------------

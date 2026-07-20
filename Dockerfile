@@ -11,6 +11,7 @@ RUN npm run build -- --outDir dist --emptyOutDir
 
 # --- Stage 2: restore, build & publish the .NET host -----------------------------------------
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS backend
+ARG GIT_VERSION=local
 WORKDIR /src
 
 # Copy only what restore needs first, for layer caching.
@@ -26,7 +27,7 @@ RUN dotnet restore src/MangaFusion.Web/MangaFusion.Web.csproj
 # Copy the rest of the source and bundle the built SPA into wwwroot before publishing.
 COPY src/ src/
 COPY --from=frontend /fe/dist src/MangaFusion.Web/wwwroot
-RUN dotnet publish src/MangaFusion.Web/MangaFusion.Web.csproj -c Release -o /app/publish /p:UseAppHost=false
+RUN dotnet publish src/MangaFusion.Web/MangaFusion.Web.csproj -c Release -o /app/publish /p:UseAppHost=false /p:GitVersion=${GIT_VERSION}
 
 # --- Stage 3: runtime ------------------------------------------------------------------------
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime

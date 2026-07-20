@@ -29,6 +29,20 @@
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
 
+  <!-- Version: CI passes /p:GitVersion=… (tag like "1.2.3" or short SHA for non-tag builds).
+       Local builds show "local" so the distinction is visible in the UI. The property that actually
+       feeds [AssemblyInformationalVersionAttribute] is InformationalVersion, not
+       AssemblyInformationalVersion (that name doesn't correspond to any SDK-recognized property and
+       silently does nothing). The SDK also auto-appends "+<full 40-char git SHA>" onto
+       InformationalVersion whenever a .git folder is present (IncludeSourceRevisionInInformationalVersion
+       defaults true) — disabled below so our own value comes through unmodified instead of e.g.
+       "local+1bbeb9370e6d8ec9155be5b0f42a34c4fbc34fef". -->
+  <PropertyGroup>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+    <InformationalVersion Condition="'$(GitVersion)' != ''">$(GitVersion)</InformationalVersion>
+    <InformationalVersion Condition="'$(GitVersion)' == ''">local</InformationalVersion>
+  </PropertyGroup>
+
   <PropertyGroup>
     <ServerGarbageCollection>false</ServerGarbageCollection>
   </PropertyGroup>

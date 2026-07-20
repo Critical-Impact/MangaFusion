@@ -105,4 +105,9 @@ public interface IMigrationService
     /// Series with any other flagged condition (ambiguous items, etc.) are left untouched, since those
     /// still need manual review. Returns how many series were cleared.</summary>
     Task<int> ClearRankingOnlyConflictsAsync(Guid batchId, CancellationToken ct = default);
+
+    /// <summary>Drops a not-yet-committed series from the batch without importing anything: its inbox
+    /// folder is moved whole to the outbox (so it stops showing up on the next scan) and the
+    /// <see cref="MigrationSeriesDetail"/> row is deleted.</summary>
+    Task RemoveSeriesAsync(Guid migrationSeriesId, CancellationToken ct = default);
 }

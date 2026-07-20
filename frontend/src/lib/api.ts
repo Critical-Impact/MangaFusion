@@ -118,6 +118,21 @@ async function getJson<T>(url: string): Promise<T> {
   return (await res.json()) as T
 }
 
+// --- Version ---------------------------------------------------------------------------------
+
+export interface AppInfo {
+  version: string
+  /** True in the standalone Windows/Linux build, false under Docker/Kubernetes — gates the
+   *  in-app shutdown/restart menu and is meaningless anywhere else. */
+  desktopMode: boolean
+}
+
+export async function getAppInfo(): Promise<AppInfo> {
+  const res = await fetch('/api/version')
+  if (!res.ok) return { version: 'unknown', desktopMode: false }
+  return (await res.json()) as AppInfo
+}
+
 // --- Auth / session --------------------------------------------------------------------------
 
 export async function getMe(): Promise<Me | null> {
@@ -644,6 +659,10 @@ export const getAdminSettings = () => getJson<AdminSettings>('/api/admin/setting
 export const putAdminSettings = (patch: Partial<AdminSettings>) =>
   send<AdminSettings>('/api/admin/settings', 'PUT', patch)
 
+/** Desktop-mode only — the server rejects both under Docker/Kubernetes. */
+export const shutdownServer = () => send<void>('/api/admin/system/shutdown', 'POST', {})
+export const restartServer = () => send<void>('/api/admin/system/restart', 'POST', {})
+
 export interface BackgroundStats {
   enqueued: number
   processing: number
@@ -826,6 +845,10 @@ export const commitAllCleanMigrationSeries = (batchId: string) =>
 
 export const clearRankingConflicts = (batchId: string) =>
   send<{ clearedCount: number }>(`/api/migration/batches/${batchId}/clear-ranking-conflicts`, 'POST', {})
+
+// Moves the series' whole inbox folder to the outbox and drops it from the batch — nothing is imported.
+export const removeMigrationSeries = (seriesId: string) =>
+  send<void>(`/api/migration/series/${seriesId}`, 'DELETE')
 
 // --- MangaUpdates import wizard ------------------------------------------------------------------
 

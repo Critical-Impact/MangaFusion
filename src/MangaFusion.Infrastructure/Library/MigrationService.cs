@@ -400,6 +400,27 @@ public sealed class MigrationService(
         return targets.Count;
     }
 
+    public async Task RemoveSeriesAsync(Guid migrationSeriesId, CancellationToken ct = default)
+    {
+        var migrationSeries = await LoadSeriesAsync(migrationSeriesId, ct);
+        EnsureNotCommitted(migrationSeries);
+
+        var sourceDir = paths.SeriesInboxFolder(migrationSeries.FolderName);
+        if (Directory.Exists(sourceDir))
+        {
+            // Whole folder, not per-file like MigrationCommitter's outbox moves: nothing here was reviewed
+            // item-by-item, so there's no winner/duplicate split to preserve.
+            var destDir = UniquePath(Path.Combine(paths.OutboxRoot(migrationSeries.Batch.Kind), migrationSeries.FolderName));
+            Directory.Move(sourceDir, destDir);
+        }
+
+        db.MigrationSeries.Remove(migrationSeries);
+        await db.SaveChangesAsync(ct);
+        logger.LogInformation(
+            "Migration review: removed series {SeriesId} ({Folder}) from the batch; its folder was moved to the outbox.",
+            migrationSeriesId, migrationSeries.FolderName);
+    }
+
     private static bool IsClean(MigrationSeries series) =>
         series.ConflictReason is null && series.Regime != MigrationRegime.Unmatched;
 

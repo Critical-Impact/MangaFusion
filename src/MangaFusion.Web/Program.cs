@@ -1,3 +1,6 @@
+using System.Diagnostics;
+using System.Net;
+using System.Net.Sockets;
 using System.Reflection;
 using System.Security.Claims;
 using System.Text.Json;
@@ -26,6 +29,8 @@ using MangaFusion.Sources.Web;
 using MangaFusion.Web;
 using MangaFusion.Web.Endpoints;
 using MangaFusion.Web.Realtime;
+using Microsoft.AspNetCore.Hosting.Server;
+using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.AspNetCore.Identity;
 
 // All data paths in config are relative (data/mangafusion.db, data/keys, data/library, …), resolved
@@ -42,6 +47,14 @@ if (string.IsNullOrEmpty(Assembly.GetEntryAssembly()?.Location))
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Desktop mode: standalone Windows/Linux binary vs. running under Docker/Kubernetes. Both
+// orchestrators run the same image, and Microsoft's base images set this env var automatically, so
+// no Dockerfile change is needed to detect either. Drives the in-app shutdown/restart menu,
+// auto-opening the browser on first launch, and the default-port fallback below — all meaningless
+// when an orchestrator already owns the process lifecycle and its own fixed port mapping.
+var isDesktopMode = Environment.GetEnvironmentVariable("DOTNET_RUNNING_IN_CONTAINER") != "true";
+builder.Services.AddSingleton(new DesktopMode(isDesktopMode));
+
 // Default listen address for the standalone binary. Applied only when nothing else configured one:
 // ASPNETCORE_URLS (the Docker image sets http://+:8080 for all interfaces; launchSettings sets :5253
 // in dev) or a --urls command-line arg (which lands in config as "urls"). Both must win over this
@@ -49,7 +62,36 @@ var builder = WebApplication.CreateBuilder(args);
 // "urls" key, not into builder.Configuration["urls"].
 if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable("ASPNETCORE_URLS")) &&
     string.IsNullOrEmpty(builder.Configuration["urls"]))
-    builder.WebHost.UseUrls("http://localhost:8080");
+{
+    // Desktop only: 8080 is a common port for other local software, and unlike the container image
+    // (where 8080 is a fixed, externally-relied-on mapping) nothing else depends on this one, so it's
+    // fine to walk forward to the next free port instead of failing to start.
+    var port = isDesktopMode ? FindAvailablePort(8080) : 8080;
+    builder.WebHost.UseUrls($"http://localhost:{port}");
+}
+
+// Probes real socket availability rather than trusting a port range to be free — the only reliable
+// way to know, and cheap enough to do at startup. TOCTOU race against Kestrel's own bind is
+// acceptable here: single local desktop user, not a hostile multi-tenant port scramble.
+static int FindAvailablePort(int startPort)
+{
+    for (var port = startPort; port < startPort + 1000; port++)
+    {
+        try
+        {
+            var listener = new TcpListener(IPAddress.Loopback, port);
+            listener.Start();
+            listener.Stop();
+            return port;
+        }
+        catch (SocketException)
+        {
+            // Taken — try the next one.
+        }
+    }
+
+    throw new InvalidOperationException($"No available port found in range {startPort}-{startPort + 999}.");
+}
 
 // --- Dynamic log level: EF Core SQL/HttpClient/Hangfire logging stays quiet (Warning) by default;
 // an admin can open everything up (Trace/Debug/...) at runtime via DynamicLogLevelService, which
@@ -234,6 +276,14 @@ app.MapPost("/api/auth/logout", async (SignInManager<ApplicationUser> signInMana
         return Results.Ok();
     })
     .RequireAuthorization();
+
+// Version: read from AssemblyInformationalVersion, set via /p:GitVersion at build time.
+var appVersion = Assembly.GetEntryAssembly()!.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
+    ?? "unknown";
+
+// Expose version for the SPA footer, and desktop mode so the nav knows whether to offer the
+// shutdown/restart menu.
+app.MapGet("/api/version", () => Results.Ok(new { version = appVersion, desktopMode = isDesktopMode }));
 
 // Known UI theme ids — kept in sync with frontend/src/lib/theme.svelte.ts's THEMES list.
 var knownThemeIds = new[] { "violet", "seal-ink", "jade", "momiji" };
@@ -441,6 +491,32 @@ app.UseHangfireDashboard("/hangfire", new DashboardOptions
 // SPA fallback: any non-API, non-file route serves the Svelte app shell.
 app.MapFallbackToFile("index.html");
 
+// Desktop mode only: open the default browser once Kestrel has actually bound its listen address.
+// UseShellExecute=true resolves to the OS "open URL" verb on all three platforms (start/open/xdg-open),
+// so this needs no per-OS branching.
+if (isDesktopMode)
+{
+    app.Lifetime.ApplicationStarted.Register(() =>
+    {
+        var address = app.Services.GetRequiredService<IServer>()
+            .Features.Get<IServerAddressesFeature>()?.Addresses.FirstOrDefault();
+        if (address is null)
+        {
+            return;
+        }
+
+        var url = address.Replace("+", "localhost").Replace("0.0.0.0", "localhost").Replace("[::]", "localhost");
+        try
+        {
+            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+        }
+        catch
+        {
+            // Best-effort — e.g. no browser/xdg-open on a minimal install. Not worth failing startup over.
+        }
+    });
+}
+
 app.Run();
 
 // Exposed for WebApplicationFactory-based integration tests.
@@ -462,3 +538,4 @@ public record DashboardItemDto(string Type, string Key, bool Visible);
 public record DashboardRequest(List<DashboardItemDto>? Items);
 public record ChangeEmailRequest(string? Email);
 public record ChangePasswordRequest(string? CurrentPassword, string? NewPassword);
+public record DesktopMode(bool IsDesktop);

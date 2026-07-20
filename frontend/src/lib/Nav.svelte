@@ -2,15 +2,28 @@
   import { onDestroy, onMount } from 'svelte'
   import { link, push, router } from 'svelte-spa-router'
   import { session, isAdmin, doLogout } from './session.svelte'
-  import { getDownloads, type DownloadItem } from './api'
+  import { getDownloads, getAppInfo, shutdownServer, restartServer, type DownloadItem } from './api'
   import { progressByDownload } from './signalr.svelte'
   import NotificationBell from './NotificationBell.svelte'
   import { Button } from './components/ui/button/index.js'
   import { Input } from './components/ui/input/index.js'
   import { Select, SelectTrigger, SelectContent, SelectItem } from './components/ui/select/index.js'
   import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator } from './components/ui/dropdown-menu/index.js'
+  import {
+    AlertDialog,
+    AlertDialogTrigger,
+    AlertDialogContent,
+    AlertDialogHeader,
+    AlertDialogTitle,
+    AlertDialogDescription,
+    AlertDialogFooter,
+    AlertDialogCancel,
+    AlertDialogAction,
+  } from './components/ui/alert-dialog/index.js'
   import MenuIcon from '@lucide/svelte/icons/menu'
   import CheckIcon from '@lucide/svelte/icons/check'
+  import RotateCcwIcon from '@lucide/svelte/icons/rotate-ccw'
+  import PowerIcon from '@lucide/svelte/icons/power'
   import { MODES, modeState, setMode, brandName, type MediaKind } from './mode.svelte'
   import { canBrowse, canBrowseKind } from './terms.svelte'
 
@@ -57,6 +70,22 @@
     await doLogout()
   }
 
+  async function doShutdown() {
+    try {
+      await shutdownServer()
+    } catch {
+      /* the process is going down either way — a failed response here isn't actionable */
+    }
+  }
+
+  async function doRestart() {
+    try {
+      await restartServer()
+    } catch {
+      /* same as shutdown — nothing useful to show once the request is sent */
+    }
+  }
+
   function navLinkClass(active: boolean): string {
     return `text-[0.9rem] no-underline ${active ? 'font-semibold text-foreground' : 'text-text-dim'}`
   }
@@ -73,6 +102,11 @@
   let downloads = $state<DownloadItem[]>([])
   let pollTimer: ReturnType<typeof setInterval> | undefined
 
+  // Version badge shown in the header. desktopMode gates the shutdown/restart controls below — true
+  // only in the standalone Windows/Linux build, never under Docker/Kubernetes.
+  let version = $state<string | null>(null)
+  let desktopMode = $state(false)
+
   async function pollDownloads() {
     try {
       downloads = await getDownloads()
@@ -84,6 +118,10 @@
   onMount(() => {
     pollDownloads()
     pollTimer = setInterval(pollDownloads, 10000)
+    getAppInfo().then(info => {
+      version = info.version
+      desktopMode = info.desktopMode
+    })
   })
   onDestroy(() => clearInterval(pollTimer))
 
@@ -165,7 +203,54 @@
   <!-- xl+: bell/profile/sign-out sit in the header. Below xl they move into the hamburger menu
        instead (see DropdownMenuContent below) so the header doesn't stay cluttered at narrow widths. -->
   <div class="hidden items-center gap-4 xl:flex">
+    {#if version}
+      <span class="text-[0.7rem] text-text-dim/60">v{version}</span>
+    {/if}
     <NotificationBell />
+    {#if isAdmin() && desktopMode}
+      <AlertDialog>
+        <AlertDialogTrigger>
+          {#snippet child({ props })}
+            <Button {...props} variant="ghost" size="icon" aria-label="Restart server">
+              <RotateCcwIcon class="size-4" />
+            </Button>
+          {/snippet}
+        </AlertDialogTrigger>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Restart MangaFusion?</AlertDialogTitle>
+            <AlertDialogDescription>
+              The server process restarts in place. This takes a few seconds, and you'll be signed out.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onclick={doRestart}>Restart</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+      <AlertDialog>
+        <AlertDialogTrigger>
+          {#snippet child({ props })}
+            <Button {...props} variant="ghost" size="icon" aria-label="Shut down server">
+              <PowerIcon class="size-4" />
+            </Button>
+          {/snippet}
+        </AlertDialogTrigger>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Shut down MangaFusion?</AlertDialogTitle>
+            <AlertDialogDescription>
+              The server process stops and won't come back on its own — you'll need to start it again.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction variant="destructive" onclick={doShutdown}>Shut down</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    {/if}
     <a href="/profile" use:link class="muted max-w-[10rem] truncate text-[0.85rem] no-underline hover:text-foreground">
       {session.me?.email}
     </a>
@@ -214,6 +299,60 @@
         <span class="text-base text-text-dim">Notifications</span>
         <NotificationBell />
       </div>
+      {#if isAdmin() && desktopMode}
+        <div class="flex items-center justify-between gap-2 px-3 py-3">
+          <span class="text-base text-text-dim">Server</span>
+          <div class="flex gap-2">
+            <AlertDialog>
+              <AlertDialogTrigger>
+                {#snippet child({ props })}
+                  <Button {...props} variant="outline" size="icon" aria-label="Restart server">
+                    <RotateCcwIcon class="size-4" />
+                  </Button>
+                {/snippet}
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Restart MangaFusion?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    The server process restarts in place. This takes a few seconds, and you'll be signed out.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogAction onclick={doRestart}>Restart</AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+            <AlertDialog>
+              <AlertDialogTrigger>
+                {#snippet child({ props })}
+                  <Button {...props} variant="outline" size="icon" aria-label="Shut down server">
+                    <PowerIcon class="size-4" />
+                  </Button>
+                {/snippet}
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Shut down MangaFusion?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    The server process stops and won't come back on its own — you'll need to start it again.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogAction variant="destructive" onclick={doShutdown}>Shut down</AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+          </div>
+        </div>
+      {/if}
+      {#if version}
+        <div class="px-3 py-2">
+          <span class="text-[0.7rem] text-text-dim/60">v{version}</span>
+        </div>
+      {/if}
       <DropdownMenuItem class="px-3 py-3 text-base" onSelect={signOut}>Sign out</DropdownMenuItem>
     </DropdownMenuContent>
   </DropdownMenu>

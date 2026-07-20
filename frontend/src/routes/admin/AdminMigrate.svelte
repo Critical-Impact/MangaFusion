@@ -13,6 +13,7 @@
       clearRankingConflicts,
       searchSeries,
       getLibraryTitles,
+      removeMigrationSeries,
       type MigrationBatchSummary,
       type MigrationBatchDetail,
       type MigrationSeriesDetail,
@@ -26,6 +27,17 @@
   import { Label } from '../../lib/components/ui/label/index.js'
   import { Select, SelectTrigger, SelectContent, SelectItem } from '../../lib/components/ui/select/index.js'
   import { Spinner } from '../../lib/components/ui/spinner/index.js'
+  import {
+      AlertDialog,
+      AlertDialogTrigger,
+      AlertDialogContent,
+      AlertDialogHeader,
+      AlertDialogTitle,
+      AlertDialogDescription,
+      AlertDialogFooter,
+      AlertDialogCancel,
+      AlertDialogAction,
+  } from '../../lib/components/ui/alert-dialog/index.js'
 
   let batches = $state<MigrationBatchSummary[]>([])
   let batch = $state<MigrationBatchDetail | null>(null)
@@ -189,6 +201,13 @@
     await act('clear-ranking', async () => {
       const { clearedCount } = await clearRankingConflicts(batch!.id)
       notify.success(clearedCount > 0 ? `Cleared ${clearedCount} ranking-only conflict(s).` : 'No matching conflicts to clear.')
+    })
+  }
+
+  async function remove(s: MigrationSeriesDetail) {
+    await act(s.id + ':remove', async () => {
+      await removeMigrationSeries(s.id)
+      notify.success(`Removed "${s.matchedTitle ?? s.comicInfoSeriesTitle ?? s.folderName}" from the migrate list.`)
     })
   }
 
@@ -480,6 +499,34 @@
                   {#if busy[s.id + ':commit'] || committing}<Spinner />{/if}
                   {busy[s.id + ':commit'] || committing ? 'Committing…' : 'Clear conflict'}
                 </Button>
+                <AlertDialog>
+                  <AlertDialogTrigger>
+                    {#snippet child({ props })}
+                      <Button
+                        {...props}
+                        variant="secondary"
+                        class="border-danger-border text-destructive hover:border-destructive"
+                        disabled={busy[s.id + ':remove'] || committing}
+                      >
+                        {#if busy[s.id + ':remove']}<Spinner />{/if}
+                        Remove from list
+                      </Button>
+                    {/snippet}
+                  </AlertDialogTrigger>
+                  <AlertDialogContent>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>Remove "{s.matchedTitle ?? s.comicInfoSeriesTitle ?? s.folderName}"?</AlertDialogTitle>
+                      <AlertDialogDescription>
+                        Nothing is imported. Its inbox folder is moved to the outbox and this entry drops off the
+                        list — a future scan won't pick it up again unless you move the folder back.
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                      <AlertDialogCancel>Cancel</AlertDialogCancel>
+                      <AlertDialogAction variant="destructive" onclick={() => remove(s)}>Remove</AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
               {/if}
             </div>
           {/if}
