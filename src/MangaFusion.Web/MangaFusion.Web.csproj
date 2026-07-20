@@ -33,6 +33,19 @@
     <ServerGarbageCollection>false</ServerGarbageCollection>
   </PropertyGroup>
 
+  <!-- Standalone self-contained single-file publish, selected by publishing with a RuntimeIdentifier
+       (dotnet publish -r RID). Gated on that RID so a plain build/test/run and the framework-dependent
+       Docker publish are unaffected. No trimming: EF Core, Autofac and Hangfire are reflection-heavy
+       and trimming breaks them at runtime. IncludeNativeLibrariesForSelfExtract folds the SQLite
+       native (e_sqlite3) into the bundle; compression keeps the size down. -->
+  <PropertyGroup Condition="'$(RuntimeIdentifier)' != ''">
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <PublishTrimmed>false</PublishTrimmed>
+  </PropertyGroup>
+
   <!-- No MSBuild property alias exists for System.GC.ConserveMemory, so it's set directly as a
        RuntimeHostConfigurationOption (same mechanism ServerGarbageCollection above expands to).
        9 = most aggressive: the GC favors returning committed memory to the OS over throughput. -->

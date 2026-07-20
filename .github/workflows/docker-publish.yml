@@ -1,4 +1,4 @@
-name: Build and publish Docker image
+name: Build and publish
 
 on:
   push:
@@ -53,3 +53,88 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  # Self-contained single-file binaries per platform, cross-published from this one Linux runner. Each
+  # archive contains the executable + the bundled SPA (wwwroot) + appsettings.json. On a v* tag they're
+  # attached to the GitHub Release; every build also uploads them as workflow artifacts.
+  binaries:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # attach archives to the release on a tag
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rid: linux-x64
+            archive: tar.gz
+          - rid: linux-arm64
+            archive: tar.gz
+          - rid: win-x64
+            archive: zip
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build the SPA into wwwroot
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Publish (${{ matrix.rid }})
+        run: >
+          dotnet publish src/MangaFusion.Web/MangaFusion.Web.csproj
+          -c Release -r ${{ matrix.rid }}
+          -o publish/${{ matrix.rid }}
+
+      - name: Compute version
+        id: ver
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Package
+        id: pkg
+        run: |
+          set -euo pipefail
+          out="publish/${{ matrix.rid }}"
+          # Drop dev-only and build-time leftovers; ship a clean runnable folder.
+          rm -f "$out"/*.pdb "$out"/*.a "$out"/appsettings.Development.json
+          stage="mangafusion"
+          rm -rf "$stage" && mkdir "$stage"
+          cp -r "$out"/. "$stage"/
+          name="mangafusion-${{ steps.ver.outputs.version }}-${{ matrix.rid }}"
+          if [[ "${{ matrix.archive }}" == "zip" ]]; then
+            zip -qr "$name.zip" "$stage"
+          else
+            tar -czf "$name.tar.gz" "$stage"
+          fi
+          echo "file=$name.${{ matrix.archive }}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mangafusion-${{ matrix.rid }}
+          path: ${{ steps.pkg.outputs.file }}
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.pkg.outputs.file }}

@@ -28,7 +28,28 @@ using MangaFusion.Web.Endpoints;
 using MangaFusion.Web.Realtime;
 using Microsoft.AspNetCore.Identity;
 
+// All data paths in config are relative (data/mangafusion.db, data/keys, data/library, …), resolved
+// against the working directory. In a shipped single-file build that could be anywhere the user
+// double-clicks from, so anchor the working directory to the executable's own folder — the `data/`
+// dir then lives next to the binary regardless of where it's launched. A single-file publish has no
+// on-disk entry-assembly path; a framework-dependent run (`dotnet run`, the Docker `dotnet X.dll`
+// image) does, and is left alone so the dev data folder stays at the repo root and Docker keeps
+// using its WORKDIR (/app).
+#pragma warning disable IL3000 // empty Location for a bundled single-file app is exactly the signal used here
+if (string.IsNullOrEmpty(Assembly.GetEntryAssembly()?.Location))
+    Directory.SetCurrentDirectory(AppContext.BaseDirectory);
+#pragma warning restore IL3000
+
 var builder = WebApplication.CreateBuilder(args);
+
+// Default listen address for the standalone binary. Applied only when nothing else configured one:
+// ASPNETCORE_URLS (the Docker image sets http://+:8080 for all interfaces; launchSettings sets :5253
+// in dev) or a --urls command-line arg (which lands in config as "urls"). Both must win over this
+// default — hence the explicit env-var check, since ASPNETCORE_URLS is bound into the *host* config's
+// "urls" key, not into builder.Configuration["urls"].
+if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable("ASPNETCORE_URLS")) &&
+    string.IsNullOrEmpty(builder.Configuration["urls"]))
+    builder.WebHost.UseUrls("http://localhost:8080");
 
 // --- Dynamic log level: EF Core SQL/HttpClient/Hangfire logging stays quiet (Warning) by default;
 // an admin can open everything up (Trace/Debug/...) at runtime via DynamicLogLevelService, which
