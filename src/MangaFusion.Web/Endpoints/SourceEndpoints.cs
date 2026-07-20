@@ -148,12 +148,25 @@ public static class SourceEndpoints
         _ => SearchOrder.Relevance,
     };
 
-    private static IReadOnlyList<ContentRating> ParseRatings(string[]? ratings) =>
-        (ratings ?? [])
-            .Select(r => Enum.TryParse<ContentRating>(r, ignoreCase: true, out var parsed) ? parsed : (ContentRating?)null)
+    private static IReadOnlyList<ContentRating> ParseRatings(string[]? ratings)
+    {
+        if (ratings != null && ratings.Any(c => c == "all"))
+        {
+            return new List<ContentRating>()
+            {
+                ContentRating.Safe,
+                ContentRating.Suggestive,
+                ContentRating.Erotica,
+                ContentRating.Pornographic
+            };
+        }
+        return (ratings ?? [])
+            .Select(r =>
+                Enum.TryParse<ContentRating>(r, ignoreCase: true, out var parsed) ? parsed : (ContentRating?)null)
             .Where(r => r is not null)
             .Select(r => r!.Value)
             .ToList();
+    }
 
     private static async Task<IResult> GetSeries(
         string id, string seriesId, CatalogService catalog, CancellationToken ct)

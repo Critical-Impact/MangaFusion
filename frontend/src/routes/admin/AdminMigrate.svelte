@@ -116,7 +116,7 @@
     const q = (matchQuery[seriesId] ?? '').trim() || fallback
     if (!q) return
     try {
-      const result = await searchSeries('mangadex', q, { limit: 8 })
+      const result = await searchSeries('mangadex', q, { limit: 8, rating: 'all' })
       matchResults[seriesId] = result.items
     } catch (err) {
       notify.error(msgOf(err))
