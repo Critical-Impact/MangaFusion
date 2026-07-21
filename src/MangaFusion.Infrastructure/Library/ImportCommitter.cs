@@ -181,7 +181,7 @@ public sealed class ImportCommitter(
         var seen = new Dictionary<string, ImportItem>();
         foreach (var item in pending)
         {
-            var key = ChapterNumber.Normalize(item.Number, item.Volume).Key;
+            var key = ChapterNumber.QualifyKey(series.SortMode, ChapterNumber.Normalize(item.Number, item.Volume).Key, item.Volume);
             if (existingKeys.Contains(key))
             {
                 throw new InvalidOperationException(

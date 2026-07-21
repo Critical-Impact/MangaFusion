@@ -91,3 +91,15 @@ public enum CollectionDashboardFilter
     /// reading — the dashboard is a read-now surface, so a fully-read or undownloaded series is noise.</summary>
     Unread = 1,
 }
+
+/// <summary>How a series' chapters are ordered. <see cref="Absolute"/> (the default) sorts purely by
+/// <see cref="Chapter.NumberSort"/>/<see cref="Chapter.NumberKey"/> as always. <see cref="VolumeThenChapter"/>
+/// sorts by volume first and chapter number second within that volume — for manually-imported series
+/// that mix whole-volume compilation files with individually-numbered extras meant to be read right
+/// after a specific volume, where the extra's own number would otherwise collide with an unrelated
+/// volume's number on the same absolute scale.</summary>
+public enum ChapterSortMode
+{
+    Absolute = 0,
+    VolumeThenChapter = 1,
+}

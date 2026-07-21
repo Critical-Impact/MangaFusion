@@ -520,6 +520,91 @@ public sealed class LibraryService(
         }
     }
 
+    public async Task UpdateChapterAsync(
+        Guid chapterId, string? number, string? volume, string? title, CancellationToken ct = default)
+    {
+        var chapter = await db.Chapters
+            .Include(c => c.ActiveRelease)
+            .Include(c => c.Releases)
+            .Include(c => c.Series)
+            .FirstOrDefaultAsync(c => c.Id == chapterId, ct)
+            ?? throw new InvalidOperationException("Chapter not found.");
+
+        var activeRelease = chapter.ActiveRelease ?? chapter.Releases.FirstOrDefault(r => r.Id == chapter.ActiveReleaseId);
+        if (activeRelease?.SourceId != LocalSourceConstants.SourceId)
+        {
+            throw new InvalidOperationException("Only manually-imported chapters can be edited.");
+        }
+
+        var (sort, rawKey) = ChapterNumber.Normalize(number, volume, title);
+        var key = ChapterNumber.QualifyKey(chapter.Series.SortMode, rawKey, volume);
+
+        var collision = await db.Chapters
+            .Where(c => c.SeriesId == chapter.SeriesId && c.Language == chapter.Language && c.Id != chapterId)
+            .FirstOrDefaultAsync(c => c.NumberKey == key, ct);
+        if (collision is not null)
+        {
+            throw new InvalidOperationException(
+                $"That number collides with chapter {collision.Number ?? collision.Volume ?? collision.Title ?? "?"}.");
+        }
+
+        chapter.Number = number;
+        chapter.Volume = volume;
+        chapter.Title = title;
+        chapter.NumberSort = sort;
+        chapter.NumberKey = key;
+        chapter.VolumeSort = ChapterNumber.VolumeSort(volume);
+
+        await db.SaveChangesAsync(ct);
+    }
+
+    public async Task SetChapterSortModeAsync(Guid seriesId, ChapterSortMode mode, CancellationToken ct = default)
+    {
+        var series = await db.Series
+            .Include(s => s.Chapters)
+            .FirstOrDefaultAsync(s => s.Id == seriesId, ct)
+            ?? throw new InvalidOperationException("Series not found.");
+
+        if (series.SortMode == mode) return;
+
+        var recomputed = series.Chapters
+            .Select(c => (Chapter: c, Key: ChapterNumber.QualifyKey(mode, ChapterNumber.Normalize(c.Number, c.Volume, c.Title).Key, c.Volume)))
+            .ToList();
+
+        var collision = recomputed
+            .GroupBy(x => (x.Chapter.Language, x.Key))
+            .FirstOrDefault(g => g.Count() > 1);
+        if (collision is not null)
+        {
+            var names = string.Join(", ", collision.Select(x => x.Chapter.Number ?? x.Chapter.Volume ?? x.Chapter.Title ?? "?"));
+            throw new InvalidOperationException(
+                $"Switching sort mode would merge these chapters onto the same number: {names}. " +
+                "Give them distinct numbers/volumes first.");
+        }
+
+        // Two-phase save: a chapter's new qualified key can transiently collide with another chapter's
+        // still-old key mid-transaction (SQLite checks the unique index per-statement, not at commit),
+        // even though the final set of keys is already known to be collision-free above — Normalize's
+        // non-numeric fallback branches embed arbitrary user text, so "qualified keys are structurally
+        // distinguishable from unqualified ones" isn't a safe assumption to skip this on. A per-row
+        // sentinel derived from the chapter's own id can't collide with anything.
+        foreach (var (chapter, _) in recomputed)
+        {
+            chapter.NumberKey = $"__pending__{chapter.Id:N}";
+        }
+
+        await db.SaveChangesAsync(ct);
+
+        foreach (var (chapter, key) in recomputed)
+        {
+            chapter.NumberKey = key;
+            chapter.VolumeSort = ChapterNumber.VolumeSort(chapter.Volume);
+        }
+
+        series.SortMode = mode;
+        await db.SaveChangesAsync(ct);
+    }
+
     /// <summary>Nulls each chapter's ActiveArtifactId/ActiveReleaseId and saves before the chapter (and
     /// its releases/artifacts) are removed. Without this, EF sees a circular dependency — Chapter's
     /// ActiveReleaseId FK points at a ChapterRelease that's simultaneously being cascade-deleted as

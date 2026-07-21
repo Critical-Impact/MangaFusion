@@ -21,6 +21,7 @@
     type Series,
   } from '../../lib/api'
   import { notify } from '../../lib/notify'
+  import { rankByChapterNumber } from '../../lib/chapterOrder'
   import { Button } from '../../lib/components/ui/button/index.js'
   import { Input } from '../../lib/components/ui/input/index.js'
   import { Checkbox } from '../../lib/components/ui/checkbox/index.js'
@@ -51,6 +52,13 @@
   // `imp` draft: freely editable, only sent on explicit save.
   let itemDraft = $state<Record<string, { number: string; volume: string; title: string }>>({})
 
+  // Explicit per-item mode (manga only — comics are always "chapter"): replaces the old implicit
+  // "blank Number means whole volume" convention with a real toggle, so the Number field's meaning is
+  // never left for the admin to infer. Seeded once from whatever the item already has (a parsed/typed
+  // Number means "chapter", otherwise "volume") and never re-derived after that, same reasoning as
+  // itemDraft's `??=` below — a background refresh shouldn't flip a toggle out from under someone mid-edit.
+  let itemMode = $state<Record<string, 'volume' | 'chapter'>>({})
+
   let timer: ReturnType<typeof setInterval> | undefined
 
   const msgOf = (e: unknown) => (e instanceof Error ? e.message : 'Something went wrong.')
@@ -66,6 +74,7 @@
     for (const s of batch.series) {
       for (const i of s.items) {
         itemDraft[i.id] ??= { number: i.number ?? '', volume: i.volume ?? '', title: i.title ?? '' }
+        itemMode[i.id] ??= i.number ? 'chapter' : 'volume'
       }
     }
   }
@@ -226,6 +235,21 @@
     }
   }
 
+  function modeOf(i: ImportItemDetail): 'volume' | 'chapter' {
+    return isComicBatch ? 'chapter' : (itemMode[i.id] ?? (i.number ? 'chapter' : 'volume'))
+  }
+
+  // Switching to "whole volume" clears any number the field might still hold (whether from a stray
+  // edit or a scan-parsed guess) and saves immediately — the whole point of the toggle is that a
+  // volume-mode row can never carry a leftover number that would silently change what it imports as.
+  function setMode(i: ImportItemDetail, mode: 'volume' | 'chapter') {
+    itemMode[i.id] = mode
+    if (mode === 'volume' && itemDraft[i.id]?.number) {
+      itemDraft[i.id].number = ''
+      saveItem(i)
+    }
+  }
+
   async function commitSeries(series: ImportSeriesDetail) {
     await act(series.id + ':commit', () => commitImportSeries(series.id))
     // The commit itself now just enqueues a background job and returns — make sure polling is
@@ -298,6 +322,44 @@
     }
     return false
   }
+
+  // Live preview of commit order, keyed by item id so the table can show + sort by it before saving
+  // any edit — reads the in-progress draft (not just the last-saved value) so it updates as you type.
+  // A "whole volume" row's number is forced null here regardless of draft contents — mode is the one
+  // source of truth for whether Number applies, never a leftover/stray field value.
+  function draftFields(i: ImportItemDetail) {
+    const d = itemDraft[i.id]
+    const volume = d ? d.volume.trim() || null : i.volume
+    const title = d ? d.title.trim() || null : i.title
+    if (modeOf(i) === 'volume') return { number: null, volume, title }
+    return { number: d ? d.number.trim() || null : i.number, volume, title }
+  }
+
+  function orderOf(items: ImportItemDetail[]): Map<ImportItemDetail, number> {
+    return rankByChapterNumber(items.filter((i) => i.include), draftFields)
+  }
+
+  // What this row will actually become once committed — the thing the old blank-Number convention
+  // left the admin to work out mentally. "chapter" mode with no number yet is flagged, not guessed at.
+  function resolvedLabel(i: ImportItemDetail): string {
+    if (modeOf(i) === 'chapter' && !draftFields(i).number) return 'needs a number'
+    const f = draftFields(i)
+    const parts: string[] = []
+    if (f.volume) parts.push(`Vol. ${f.volume}`)
+    if (f.number) parts.push(`Ch. ${f.number}`)
+    return parts.length ? parts.join(' ') : 'Oneshot'
+  }
+
+  const hasIncompleteChapters = (items: ImportItemDetail[]) =>
+    items.some((i) => i.include && modeOf(i) === 'chapter' && !draftFields(i).number)
+
+  // Per-series toggle: view the table in file-scan order (default) or the projected commit order.
+  let sortByOrder = $state<Record<string, boolean>>({})
+
+  function displayItems(s: ImportSeriesDetail, order: Map<ImportItemDetail, number>): ImportItemDetail[] {
+    if (!sortByOrder[s.id]) return s.items
+    return [...s.items].sort((a, b) => (order.get(a) ?? Number.POSITIVE_INFINITY) - (order.get(b) ?? Number.POSITIVE_INFINITY))
+  }
 </script>
 
 <div class="flex flex-col gap-4">
@@ -346,6 +408,7 @@
 
     <ul class="m-0 flex list-none flex-col gap-2 p-0">
       {#each visibleSeries as s (s.id)}
+        {@const order = orderOf(s.items)}
         <li class="overflow-hidden rounded-[var(--r-md)] border border-border">
           <button
             class="flex w-full items-center gap-[0.6rem] border-0 bg-[#1c1c24] px-[0.9rem] py-[0.6rem] text-left [font:inherit] text-foreground"
@@ -520,23 +583,39 @@
                     <th class="border-b border-border px-[0.4rem] py-[0.3rem] text-left font-medium text-text-mute">Include</th>
                     <th class="border-b border-border px-[0.4rem] py-[0.3rem] text-left font-medium text-text-mute">File</th>
                     <th class="border-b border-border px-[0.4rem] py-[0.3rem] text-left font-medium text-text-mute">Format</th>
-                    <!-- Comics ship one file per issue, so the number is pre-filled from the filename
-                         ("100 Bullets #017" → 17). Manga releases are one file per volume, where a blank
-                         number means "import the whole volume as one artifact". -->
+                    {#if !isComicBatch}
+                      <!-- Manga releases are usually one file per volume, but a series can also mix in
+                           individually-released numbered chapters (specials, extras) — this toggle makes
+                           that choice explicit per file instead of leaving it to an implicit blank-Number
+                           convention. Comics have no such ambiguity: every file is a numbered issue. -->
+                      <th class="border-b border-border px-[0.4rem] py-[0.3rem] text-left font-medium text-text-mute">
+                        Mode
+                      </th>
+                    {/if}
                     <th
                       class="border-b border-border px-[0.4rem] py-[0.3rem] text-left font-medium text-text-mute"
                       title={isComicBatch
                         ? 'The issue number, read from the filename. Correct it if the parse guessed wrong.'
-                        : 'Leave blank to import this file as the entire volume, not a numbered chapter.'}
+                        : 'The chapter number — only used when Mode is "Numbered chapter".'}
                     >{isComicBatch ? 'Issue' : 'Number'}</th>
                     <th class="border-b border-border px-[0.4rem] py-[0.3rem] text-left font-medium text-text-mute">Volume</th>
                     <th class="border-b border-border px-[0.4rem] py-[0.3rem] text-left font-medium text-text-mute">Title</th>
                     <th class="border-b border-border px-[0.4rem] py-[0.3rem] text-left font-medium text-text-mute">Pages</th>
                     <th class="border-b border-border px-[0.4rem] py-[0.3rem] text-left font-medium text-text-mute">Size</th>
+                    <th class="border-b border-border px-[0.4rem] py-[0.3rem] text-left font-medium text-text-mute">
+                      <button
+                        type="button"
+                        class="cursor-pointer border-0 bg-transparent p-0 [font:inherit] text-text-mute underline decoration-dotted hover:text-text-dim"
+                        title="How this file will import, and its projected order once committed — click to sort the table by it"
+                        onclick={() => (sortByOrder[s.id] = !sortByOrder[s.id])}
+                      >
+                        Preview {sortByOrder[s.id] ? '▼' : ''}
+                      </button>
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
-                  {#each s.items as i (i.id)}
+                  {#each displayItems(s, order) as i (i.id)}
                     <tr class={i.include ? '' : 'opacity-50'}>
                       <td class="border-b border-border-dim px-[0.4rem] py-[0.3rem] align-top">
                         <Checkbox
@@ -554,13 +633,35 @@
                         {/if}
                       </td>
                       <td class="border-b border-border-dim px-[0.4rem] py-[0.3rem] align-top">{i.format}</td>
+                      {#if !isComicBatch}
+                        <td class="border-b border-border-dim px-[0.4rem] py-[0.3rem] align-top">
+                          {#if !isEditable(s, i)}
+                            {modeOf(i) === 'chapter' ? 'Chapter' : 'Whole volume'}
+                          {:else}
+                            <Select
+                              type="single"
+                              value={modeOf(i)}
+                              disabled={busy[i.id + ':fields']}
+                              onValueChange={(v) => setMode(i, v as 'volume' | 'chapter')}
+                            >
+                              <SelectTrigger class="w-[8.5rem]">{modeOf(i) === 'chapter' ? 'Chapter' : 'Whole volume'}</SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="volume" label="Whole volume">Whole volume</SelectItem>
+                                <SelectItem value="chapter" label="Numbered chapter">Numbered chapter</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          {/if}
+                        </td>
+                      {/if}
                       <td class="border-b border-border-dim px-[0.4rem] py-[0.3rem] align-top">
                         {#if !isEditable(s, i)}
                           {i.number ?? '—'}
+                        {:else if modeOf(i) === 'volume'}
+                          <span class="text-text-mute">— (whole volume)</span>
                         {:else if itemDraft[i.id]}
                           <Input
-                            class="w-[4.5rem]"
-                            placeholder="whole vol."
+                            class="w-[5.5rem]"
+                            placeholder="e.g. 12.5"
                             bind:value={itemDraft[i.id].number}
                             disabled={busy[i.id + ':fields']}
                             onblur={() => saveItem(i)}
@@ -593,21 +694,34 @@
                       </td>
                       <td class="border-b border-border-dim px-[0.4rem] py-[0.3rem] align-top">{i.pageCount}</td>
                       <td class="border-b border-border-dim px-[0.4rem] py-[0.3rem] align-top">{sizeOf(i.sizeBytes)}</td>
+                      <td class="border-b border-border-dim px-[0.4rem] py-[0.3rem] align-top">
+                        {#if resolvedLabel(i) === 'needs a number'}
+                          <span class="text-warn">needs a number</span>
+                        {:else}
+                          <span class="text-text-dim">{resolvedLabel(i)}</span>
+                          <span class="text-text-mute"> · #{order.get(i) ?? '—'}</span>
+                        {/if}
+                      </td>
                     </tr>
                   {/each}
                 </tbody>
               </table>
 
               {#if s.status === 'NeedsReview'}
+                {#if hasIncompleteChapters(s.items)}
+                  <p class="m-0 text-[0.8rem] text-err-soft">
+                    One or more included items are set to "Numbered chapter" but don't have a number yet — give
+                    them one, or switch them back to "Whole volume", before committing.
+                  </p>
+                {/if}
                 {#if hasDuplicateNumbers(s.items)}
                   <p class="m-0 text-[0.8rem] text-err-soft">
-                    Two or more included items share the same chapter number — or the same volume, if you've left
-                    the number blank to import a whole volume — give each a distinct number (or volume) before
-                    committing.
+                    Two or more included items share the same chapter number — or the same volume, for two whole-
+                    volume items — give each a distinct number (or volume) before committing.
                   </p>
                 {/if}
                 <Button
-                  disabled={busy[s.id + ':commit'] || includedCount(s.items) === 0 || hasDuplicateNumbers(s.items)}
+                  disabled={busy[s.id + ':commit'] || includedCount(s.items) === 0 || hasDuplicateNumbers(s.items) || hasIncompleteChapters(s.items)}
                   onclick={() => commitSeries(s)}
                 >
                   {#if busy[s.id + ':commit']}<Spinner />{/if}

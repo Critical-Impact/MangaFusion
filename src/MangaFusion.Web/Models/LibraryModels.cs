@@ -48,7 +48,8 @@ public sealed record LibrarySeriesDetailDto(
     bool FollowAutoDownload,
     IReadOnlyList<string> FollowLanguages,
     bool Reading,
-    IReadOnlyList<LibraryChapterDto> Chapters);
+    IReadOnlyList<LibraryChapterDto> Chapters,
+    string SortMode);
 
 public sealed record LibraryChapterDto(
     Guid Id,
@@ -56,13 +57,19 @@ public sealed record LibraryChapterDto(
     string? Number,
     decimal? NumberSort,
     string? Volume,
+    decimal? VolumeSort,
     string? Title,
     bool Downloaded,
     string? ActiveGroup,
     int PageIndex,
     bool Completed,
     DateTimeOffset? PublishedAt,
-    IReadOnlyList<ReleaseDto> Releases);
+    IReadOnlyList<ReleaseDto> Releases,
+    bool CanEdit);
+
+public sealed record UpdateChapterRequest(string? Number, string? Volume, string? Title);
+
+public sealed record SetSortModeRequest(string SortMode);
 
 public sealed record ReleaseDto(
     Guid Id,

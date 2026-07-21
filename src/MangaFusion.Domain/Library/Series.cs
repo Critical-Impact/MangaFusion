@@ -26,6 +26,9 @@ public class Series
     public int? Year { get; set; }
     public string? OriginalLanguage { get; set; }
 
+    /// <summary>How this series' chapters are ordered — see <see cref="ChapterSortMode"/>.</summary>
+    public ChapterSortMode SortMode { get; set; } = ChapterSortMode.Absolute;
+
     // --- Shared download policy -----------------------------------------------------------------
     /// <summary>Ordered scanlation-group preference (highest first). Unlisted groups are fallback.</summary>
     public List<string> PreferredGroups { get; set; } = [];

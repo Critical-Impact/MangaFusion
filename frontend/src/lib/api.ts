@@ -327,6 +327,7 @@ export interface LibraryChapter {
   number: string | null
   numberSort: number | null
   volume: string | null
+  volumeSort: number | null
   title: string | null
   downloaded: boolean
   activeGroup: string | null
@@ -334,6 +335,9 @@ export interface LibraryChapter {
   completed: boolean
   publishedAt: string | null
   releases: LibraryRelease[]
+  /** True if this chapter's active release was manually imported (local library / import wizard),
+   *  making its number/volume/title editable. False for chapters sourced from a live download source. */
+  canEdit: boolean
 }
 
 export interface LibrarySeriesDetail {
@@ -360,6 +364,10 @@ export interface LibrarySeriesDetail {
   followLanguages: string[]
   reading: boolean
   chapters: LibraryChapter[]
+  /** "Absolute" (default — sorts purely by chapter number) or "VolumeThenChapter" (sorts by volume
+   *  first, chapter number second within it — for manually-imported series mixing whole-volume
+   *  compilations with individually-numbered extras tagged to a specific volume). */
+  sortMode: string
 }
 
 /** Route to the author page for a credit. Falls back to a name-based "local" route when the source
@@ -521,6 +529,12 @@ export const setPolicy = (
   languages: string[],
 ) => send<void>(`/api/library/series/${seriesId}/policy`, 'PUT', { gracePeriodDays, autoDownload, languages })
 
+/** Switches a series' chapter ordering mode ("Absolute" | "VolumeThenChapter"), recomputing every
+ *  existing chapter's sort key. Rejects (400) if the switch would merge two chapters onto the same
+ *  identity — give the colliding chapters distinct numbers/volumes first. */
+export const setChapterSortMode = (seriesId: string, sortMode: string) =>
+  send<void>(`/api/library/series/${seriesId}/sort-mode`, 'PUT', { sortMode })
+
 export const scanSeries = (seriesId: string) =>
   send<unknown>(`/api/library/series/${seriesId}/scan`, 'POST')
 
@@ -538,6 +552,14 @@ export const deleteSeries = (seriesId: string) =>
  * in place for them. Cannot be undone. */
 export const deleteChapter = (chapterId: string) =>
   send<void>(`/api/library/chapters/${chapterId}`, 'DELETE')
+
+/** Edits a manually-imported chapter's number/volume/title, recomputing its sort position. Rejects
+ *  (400) if the chapter isn't manually imported, or if the new number/volume collides with a sibling
+ *  chapter's — the caller should surface the thrown Error's message. */
+export const updateChapter = (
+  chapterId: string,
+  body: { number: string | null; volume: string | null; title: string | null },
+) => send<void>(`/api/library/chapters/${chapterId}`, 'PATCH', body)
 
 // --- Reader -----------------------------------------------------------------------------------
 

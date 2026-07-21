@@ -125,4 +125,15 @@ public interface ILibraryService
     /// sole remaining link for is deleted too (DB row + on-disk file); an artifact still shared with
     /// other chapters (a multi-chapter volume file) is left in place for them. Cannot be undone.</summary>
     Task DeleteChapterAsync(Guid chapterId, CancellationToken ct = default);
+
+    /// <summary>Edits a manually-imported chapter's number/volume/title, recomputing its sort key.
+    /// Throws if the chapter isn't manually imported, or if the new number/volume collides with
+    /// another chapter in the same series+language.</summary>
+    Task UpdateChapterAsync(
+        Guid chapterId, string? number, string? volume, string? title, CancellationToken ct = default);
+
+    /// <summary>Switches a series' chapter ordering mode, recomputing every existing chapter's sort
+    /// key accordingly. A no-op if the series is already in that mode. Throws (without changing
+    /// anything) if the switch would merge two existing chapters onto the same identity key.</summary>
+    Task SetChapterSortModeAsync(Guid seriesId, ChapterSortMode mode, CancellationToken ct = default);
 }

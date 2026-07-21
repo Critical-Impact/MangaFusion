@@ -9,6 +9,7 @@
     unfollowSeries,
     setPreferredGroups,
     setPolicy,
+    setChapterSortMode,
     scanSeries,
     refreshSeriesMetadata,
     deleteSeries,
@@ -32,6 +33,7 @@
   import { t } from '../lib/terms.svelte'
   import Cover from '../lib/Cover.svelte'
   import AddToCollection from '../lib/AddToCollection.svelte'
+  import EditChapterDialog from '../lib/EditChapterDialog.svelte'
   import MultiSelectDropdown from '../lib/MultiSelectDropdown.svelte'
   import { Alert, AlertDescription } from '../lib/components/ui/alert/index.js'
   import { Button } from '../lib/components/ui/button/index.js'
@@ -88,12 +90,20 @@
   let policyAuto = $state(false)
   let policyGrace = $state<number | null>(null)
   let policyLangs = $state<string[]>([])
+  // Chapter sort mode editor (admin-only) — see setChapterSortMode.
+  let chapterSortMode = $state('Absolute')
   let scanning = $state(false)
   let queuingMissing = $state(false)
   let groupFilter = $state<string | null>(null)
 
   // A manually-imported series: no remote source to download from or scan.
   const isLocal = $derived(detail?.sourceId === 'local')
+
+  // Whether this series has any manually-imported chapter — the reliable per-chapter signal (not
+  // isLocal/sourceId, which reflects the series' metadata-primary source and is misleading for e.g.
+  // a ComicVine-matched comic whose chapters are all still manually imported). Gates the sort-mode
+  // control, since VolumeThenChapter mode only ever matters for manually-imported content.
+  const hasManualChapters = $derived((detail?.chapters ?? []).some((c) => c.canEdit))
 
   const sourceCaps = $derived(sources.find((s) => s.id === detail?.sourceId)?.capabilities ?? [])
 
@@ -134,12 +144,27 @@
       .map((id) => ({ id, name: languageName(id) }))
       .sort((a, b) => a.name.localeCompare(b.name))
   })
+  // Mirrors the backend's chapter ordering (LibraryEndpoints.OrderChapters / ReaderService): Absolute
+  // sorts purely by chapter number; VolumeThenChapter sorts by volume first, and — within a volume —
+  // puts the whole-volume row itself (blank number) before any numbered extra tagged to it.
+  function compareChapters(a: LibraryChapter, b: LibraryChapter, mode: string): number {
+    if (mode === 'VolumeThenChapter') {
+      const av = a.volumeSort ?? Number.MAX_VALUE
+      const bv = b.volumeSort ?? Number.MAX_VALUE
+      if (av !== bv) return av - bv
+      const aIsVolume = a.number === null ? 0 : 1
+      const bIsVolume = b.number === null ? 0 : 1
+      if (aIsVolume !== bIsVolume) return aIsVolume - bIsVolume
+    }
+    return (a.numberSort ?? Number.MAX_VALUE) - (b.numberSort ?? Number.MAX_VALUE)
+  }
+
   // The chapter to send the reader to: the first downloaded, unfinished chapter in order, or (if
   // everything downloaded has been read) the last downloaded chapter, for re-reading.
   const nextToRead = $derived.by(() => {
     const downloaded = (detail?.chapters ?? [])
       .filter((c) => c.downloaded)
-      .sort((a, b) => (a.numberSort ?? Number.MAX_VALUE) - (b.numberSort ?? Number.MAX_VALUE))
+      .sort((a, b) => compareChapters(a, b, detail?.sortMode ?? 'Absolute'))
     if (downloaded.length === 0) return null
     return downloaded.find((c) => !c.completed) ?? downloaded[downloaded.length - 1]
   })
@@ -155,7 +180,7 @@
     (detail?.chapters ?? [])
       .filter((c) => !lang || c.language === lang)
       .filter((c) => !groupFilter || chapterGroups(c).includes(groupFilter))
-      .sort((a, b) => (a.numberSort ?? Number.MAX_VALUE) - (b.numberSort ?? Number.MAX_VALUE)),
+      .sort((a, b) => compareChapters(a, b, detail?.sortMode ?? 'Absolute')),
   )
 
   // Per-group chapter counts for the selected language (drives the groups panel).
@@ -200,6 +225,7 @@
       policyAuto = detail.autoDownload
       policyGrace = detail.gracePeriodDays
       policyLangs = [...detail.seriesLanguages]
+      chapterSortMode = detail.sortMode
       if (observedLanguages.length && !observedLanguages.includes(lang)) {
         lang = observedLanguages.includes('en') ? 'en' : observedLanguages[0]
       }
@@ -310,6 +336,15 @@
   async function savePolicy() {
     await setPolicy(params.id, policyGrace, policyAuto, policyLangs)
     await refresh()
+  }
+
+  async function saveSortMode() {
+    try {
+      await setChapterSortMode(params.id, chapterSortMode)
+      await refresh()
+    } catch (err) {
+      notify.error(err instanceof Error ? err.message : 'Failed to change chapter sort mode.')
+    }
   }
 
   async function scanNow() {
@@ -606,6 +641,34 @@
       </Card>
     {/if}
 
+    <!-- Only matters for manually-imported content (whole-volume compilations mixed with
+         individually-numbered extras) — gated on the same per-chapter canEdit signal the chapter-edit
+         dialog uses, not isLocal/sourceId (misleading for e.g. a ComicVine-matched comic). -->
+    {#if isAdmin() && hasManualChapters}
+      <Card class="mt-2 mb-5" size="sm">
+        <CardContent>
+          <div class="flex flex-wrap items-center gap-3">
+            <span class="text-sm text-text-dim">Chapter order</span>
+            <Select type="single" bind:value={chapterSortMode}>
+              <SelectTrigger>
+                {chapterSortMode === 'VolumeThenChapter' ? 'Volume, then chapter' : 'Absolute chapter numbers'}
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="Absolute" label="Absolute chapter numbers">Absolute chapter numbers</SelectItem>
+                <SelectItem value="VolumeThenChapter" label="Volume, then chapter">Volume, then chapter</SelectItem>
+              </SelectContent>
+            </Select>
+            <Button onclick={saveSortMode}>Save</Button>
+          </div>
+          <p class="mt-1.5 text-xs text-text-mute">
+            "Volume, then chapter" sorts whole-volume imports by volume number, with any
+            individually-numbered extra tagged to a volume sorting right after it — for series
+            mixing volume compilations with standalone specials.
+          </p>
+        </CardContent>
+      </Card>
+    {/if}
+
     <Card class="mt-2 mb-5">
       <CardHeader class="border-b border-border pb-(--card-spacing)">
         <CardTitle>{t('Chapters')}</CardTitle>
@@ -767,6 +830,9 @@
                       </TooltipContent>
                     </Tooltip>
                   {/if}
+                {/if}
+                {#if isAdmin() && c.canEdit}
+                  <EditChapterDialog chapter={c} allChapters={detail.chapters} onSaved={refresh} />
                 {/if}
                 {#if isAdmin()}
                   <AlertDialog>

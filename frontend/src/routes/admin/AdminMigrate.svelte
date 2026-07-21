@@ -17,9 +17,11 @@
       type MigrationBatchSummary,
       type MigrationBatchDetail,
       type MigrationSeriesDetail,
+      type MigrationItemDetail,
       type Series, clearMigrationConflict,
   } from '../../lib/api'
   import { notify } from '../../lib/notify'
+  import { rankByChapterNumber } from '../../lib/chapterOrder'
   import { progressByMigrationSeries, progressByMigrationBatch } from '../../lib/signalr.svelte'
   import { Button } from '../../lib/components/ui/button/index.js'
   import { Input } from '../../lib/components/ui/input/index.js'
@@ -155,6 +157,24 @@
   }
 
   const dispositions = ['Import', 'Duplicate', 'Quarantine']
+
+  // Live preview of commit order — only 'Import'-dispositioned items actually become chapters, so
+  // Duplicate/Quarantine items get no order number.
+  function orderOf(items: MigrationItemDetail[]): Map<MigrationItemDetail, number> {
+    return rankByChapterNumber(
+      items.filter((i) => i.disposition === 'Import'),
+      (i) => ({ number: i.number, title: i.chapterTitle }),
+    )
+  }
+
+  // Per-series toggle: view the table in file-scan order (default) or the projected commit order.
+  let sortByOrder = $state<Record<string, boolean>>({})
+
+  function displayItems(s: MigrationSeriesDetail, order: Map<MigrationItemDetail, number>): MigrationItemDetail[] {
+    if (!sortByOrder[s.id]) return s.items
+    return [...s.items].sort((a, b) => (order.get(a) ?? Number.POSITIVE_INFINITY) - (order.get(b) ?? Number.POSITIVE_INFINITY))
+  }
+
   const batchLabel = (b: MigrationBatchSummary) => `${new Date(b.createdAt).toLocaleString()} · ${b.seriesCount} series · ${b.status}`
   const currentBatchLabel = $derived.by(() => {
     const found = batches.find((b) => b.id === batch?.id)
@@ -312,6 +332,7 @@
 
     <ul class="m-0 flex list-none flex-col gap-2 p-0">
       {#each visibleSeries as s (s.id)}
+        {@const order = orderOf(s.items)}
         <li class="overflow-hidden rounded-[var(--r-md)] border border-border">
           <button
             class="flex w-full items-center gap-[0.6rem] border-0 bg-[#1c1c24] px-[0.9rem] py-[0.6rem] text-left [font:inherit] text-foreground"
@@ -449,10 +470,20 @@
                     <th class="border-b border-border px-[0.4rem] py-[0.3rem] text-left font-medium text-text-mute">Size</th>
                     <th class="border-b border-border px-[0.4rem] py-[0.3rem] text-left font-medium text-text-mute">Disposition</th>
                     <th class="border-b border-border px-[0.4rem] py-[0.3rem] text-left font-medium text-text-mute">Flag</th>
+                    <th class="border-b border-border px-[0.4rem] py-[0.3rem] text-left font-medium text-text-mute">
+                      <button
+                        type="button"
+                        class="cursor-pointer border-0 bg-transparent p-0 [font:inherit] text-text-mute underline decoration-dotted hover:text-text-dim"
+                        title="Projected chapter order once committed — click to sort the table by it"
+                        onclick={() => (sortByOrder[s.id] = !sortByOrder[s.id])}
+                      >
+                        Order # {sortByOrder[s.id] ? '▼' : ''}
+                      </button>
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
-                  {#each s.items as i (i.id)}
+                  {#each displayItems(s, order) as i (i.id)}
                     <tr>
                       <td class={`max-w-[22rem] border-b border-border-dim px-[0.4rem] py-[0.3rem] align-top [overflow-wrap:anywhere] ${i.isWinner ? 'text-ok' : ''}`}>
                         {i.fileName}
@@ -479,6 +510,7 @@
                         {/if}
                       </td>
                       <td class="border-b border-border-dim px-[0.4rem] py-[0.3rem] align-top text-text-mute">{i.flagReason ?? ''}</td>
+                      <td class="border-b border-border-dim px-[0.4rem] py-[0.3rem] align-top text-text-mute">{order.get(i) ?? '—'}</td>
                     </tr>
                   {/each}
                 </tbody>

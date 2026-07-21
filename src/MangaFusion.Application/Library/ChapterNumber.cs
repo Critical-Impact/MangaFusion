@@ -1,4 +1,5 @@
 using System.Globalization;
+using MangaFusion.Domain.Library;
 
 namespace MangaFusion.Application.Library;
 
@@ -58,4 +59,45 @@ public static class ChapterNumber
         groups.Count > 0 && !string.IsNullOrWhiteSpace(groups[0])
             ? groups[0].Trim().ToLowerInvariant()
             : null;
+
+    /// <summary>Sortable numeric form of a raw volume string (null when unparseable/absent) — the
+    /// <see cref="Chapter.VolumeSort"/> companion to <see cref="Normalize"/>'s own Sort, used when a
+    /// series' <see cref="ChapterSortMode"/> is <see cref="ChapterSortMode.VolumeThenChapter"/>.</summary>
+    public static decimal? VolumeSort(string? volume)
+    {
+        var trimmed = volume?.Trim();
+        return !string.IsNullOrEmpty(trimmed) &&
+            decimal.TryParse(trimmed, NumberStyles.Number, CultureInfo.InvariantCulture, out var value)
+            ? value
+            : null;
+    }
+
+    /// <summary>Volume-qualifies an identity <paramref name="key"/> (from <see cref="Normalize"/>) for
+    /// series using <see cref="ChapterSortMode.VolumeThenChapter"/> — a no-op for the default
+    /// <see cref="ChapterSortMode.Absolute"/> mode. Qualification is needed because <c>NumberKey</c> is
+    /// not just a sort tiebreak, it's the DB's dedup identity: without it, two different volumes'
+    /// same-numbered "extra" chapters (e.g. Vol.7 Ch.1 and Vol.8 Ch.1) would collapse onto one Chapter
+    /// row. The volume part is normalized the same way <see cref="Normalize"/>'s own volume branch is,
+    /// so e.g. "7" and "07" share a namespace instead of being treated as different volumes.</summary>
+    public static string QualifyKey(ChapterSortMode mode, string key, string? volume)
+    {
+        if (mode == ChapterSortMode.Absolute) return key;
+
+        var trimmedVolume = volume?.Trim();
+        string volumePart;
+        if (string.IsNullOrEmpty(trimmedVolume))
+        {
+            volumePart = "novol";
+        }
+        else if (decimal.TryParse(trimmedVolume, NumberStyles.Number, CultureInfo.InvariantCulture, out var volValue))
+        {
+            volumePart = volValue.ToString("0.####", CultureInfo.InvariantCulture);
+        }
+        else
+        {
+            volumePart = trimmedVolume.ToLowerInvariant();
+        }
+
+        return $"{volumePart}:{key}";
+    }
 }

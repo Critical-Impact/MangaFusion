@@ -51,7 +51,9 @@ public sealed class ChapterFileImporter(
         var specs = NormalizeSpecs(chapters, total);
 
         // Reject duplicate chapter numbers (both within the request and against existing chapters).
-        var keyed = specs.Select(s => (Spec: s, Key: ChapterNumber.Normalize(s.Number, s.Volume).Key)).ToList();
+        var keyed = specs
+            .Select(s => (Spec: s, Key: ChapterNumber.QualifyKey(series.SortMode, ChapterNumber.Normalize(s.Number, s.Volume).Key, s.Volume)))
+            .ToList();
         var existing = series.Chapters
             .Where(c => c.Language == language)
             .Select(c => c.NumberKey)
@@ -128,6 +130,7 @@ public sealed class ChapterFileImporter(
                     NumberSort = sort,
                     NumberKey = key,
                     Volume = spec.Volume,
+                    VolumeSort = ChapterNumber.VolumeSort(spec.Volume),
                     Title = spec.Title,
                     ActiveArtifactId = artifact.Id,
                 };

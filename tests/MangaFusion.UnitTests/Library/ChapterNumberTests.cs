@@ -1,4 +1,5 @@
 using MangaFusion.Application.Library;
+using MangaFusion.Domain.Library;
 
 namespace MangaFusion.UnitTests.Library;
 
@@ -87,4 +88,39 @@ public class ChapterNumberTests
     [Fact]
     public void GroupKey_of_empty_is_null() =>
         Assert.Null(ChapterNumber.GroupKey([]));
+
+    [Fact]
+    public void QualifyKey_absolute_mode_passes_key_through_unchanged() =>
+        Assert.Equal("1", ChapterNumber.QualifyKey(ChapterSortMode.Absolute, "1", "7"));
+
+    [Fact]
+    public void QualifyKey_volume_then_chapter_prefixes_with_volume() =>
+        Assert.Equal("7:1", ChapterNumber.QualifyKey(ChapterSortMode.VolumeThenChapter, "1", "7"));
+
+    [Fact]
+    public void QualifyKey_blank_volume_gets_novol_prefix() =>
+        Assert.Equal("novol:1", ChapterNumber.QualifyKey(ChapterSortMode.VolumeThenChapter, "1", null));
+
+    [Fact]
+    public void QualifyKey_different_volumes_same_number_do_not_collide() =>
+        Assert.NotEqual(
+            ChapterNumber.QualifyKey(ChapterSortMode.VolumeThenChapter, "1", "7"),
+            ChapterNumber.QualifyKey(ChapterSortMode.VolumeThenChapter, "1", "8"));
+
+    [Fact]
+    public void QualifyKey_equivalent_volume_text_share_a_namespace() =>
+        Assert.Equal(
+            ChapterNumber.QualifyKey(ChapterSortMode.VolumeThenChapter, "1", "7"),
+            ChapterNumber.QualifyKey(ChapterSortMode.VolumeThenChapter, "1", "07"));
+
+    [Fact]
+    public void VolumeSort_parses_numeric_volume() =>
+        Assert.Equal(7m, ChapterNumber.VolumeSort("7"));
+
+    [Fact]
+    public void VolumeSort_of_blank_or_nonnumeric_is_null()
+    {
+        Assert.Null(ChapterNumber.VolumeSort(null));
+        Assert.Null(ChapterNumber.VolumeSort("Special"));
+    }
 }

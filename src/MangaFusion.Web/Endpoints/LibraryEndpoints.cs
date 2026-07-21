@@ -29,6 +29,7 @@ public static class LibraryEndpoints
         group.MapPost("/series/{id:guid}/refresh-metadata", RefreshMetadata).RequireAuthorization("Admin");
         group.MapDelete("/series/{id:guid}", DeleteSeries).RequireAuthorization("Admin");
         group.MapDelete("/chapters/{id:guid}", DeleteChapter).RequireAuthorization("Admin");
+        group.MapPatch("/chapters/{id:guid}", UpdateChapter).RequireAuthorization("Admin");
 
         group.MapPost("/chapters/{id:guid}/download", QueueDownload);
         group.MapPost("/series/{id:guid}/download-missing", QueueMissing);
@@ -38,6 +39,26 @@ public static class LibraryEndpoints
 
         group.MapPut("/series/{id:guid}/groups", SetGroups).RequireAuthorization("Admin");
         group.MapPut("/series/{id:guid}/policy", SetPolicy).RequireAuthorization("Admin");
+        group.MapPut("/series/{id:guid}/sort-mode", SetSortMode).RequireAuthorization("Admin");
+    }
+
+    private static async Task<IResult> SetSortMode(
+        Guid id, SetSortModeRequest request, ILibraryService library, CancellationToken ct)
+    {
+        if (!Enum.TryParse<ChapterSortMode>(request.SortMode, ignoreCase: true, out var mode))
+        {
+            return Results.BadRequest(new { error = $"Unknown sort mode '{request.SortMode}'." });
+        }
+
+        try
+        {
+            await library.SetChapterSortModeAsync(id, mode, ct);
+            return Results.NoContent();
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(new { error = ex.Message });
+        }
     }
 
     private static async Task<IResult> QueueMissing(
@@ -228,6 +249,20 @@ public static class LibraryEndpoints
         }
     }
 
+    private static async Task<IResult> UpdateChapter(
+        Guid id, UpdateChapterRequest request, ILibraryService library, CancellationToken ct)
+    {
+        try
+        {
+            await library.UpdateChapterAsync(id, request.Number, request.Volume, request.Title, ct);
+            return Results.NoContent();
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(new { error = ex.Message });
+        }
+    }
+
     private static IReadOnlyList<IReadOnlyList<Guid>> ParseTagFacets(string[]? tags) =>
         (tags ?? [])
             .Select(facet => (IReadOnlyList<Guid>)facet
@@ -332,10 +367,7 @@ public static class LibraryEndpoints
             ? registry.Contains(sourceId) ? registry.Get(sourceId).DisplayName : sourceId
             : null;
 
-        var chapters = series.Chapters
-            .OrderBy(c => c.Language)
-            .ThenBy(c => c.NumberSort ?? decimal.MaxValue)
-            .ThenBy(c => c.NumberKey)
+        var chapters = OrderChapters(series.Chapters, series.SortMode)
             .Select(c => ToChapter(c, progress))
             .ToList();
 
@@ -362,8 +394,26 @@ public static class LibraryEndpoints
             follow?.AutoDownload ?? false,
             follow?.Languages ?? [],
             reading,
-            chapters);
+            chapters,
+            series.SortMode.ToString());
     }
+
+    /// <summary>Orders a series' chapters for display. <see cref="ChapterSortMode.Absolute"/> (the
+    /// default) sorts purely by NumberSort/NumberKey as always.
+    /// <see cref="ChapterSortMode.VolumeThenChapter"/> sorts by volume first, then chapter number —
+    /// the whole-volume row itself (blank Number) always sorts first within its own volume, since the
+    /// existing NumberKey uniqueness constraint already guarantees a blank-Number row is unique per
+    /// volume (see ChapterNumber.QualifyKey's doc comment).</summary>
+    private static IEnumerable<Chapter> OrderChapters(IEnumerable<Chapter> chapters, ChapterSortMode mode) =>
+        mode == ChapterSortMode.VolumeThenChapter
+            ? chapters.OrderBy(c => c.Language)
+                .ThenBy(c => c.VolumeSort ?? decimal.MaxValue)
+                .ThenBy(c => c.Number == null ? 0 : 1)
+                .ThenBy(c => c.NumberSort ?? decimal.MaxValue)
+                .ThenBy(c => c.NumberKey)
+            : chapters.OrderBy(c => c.Language)
+                .ThenBy(c => c.NumberSort ?? decimal.MaxValue)
+                .ThenBy(c => c.NumberKey);
 
     private static LibraryChapterDto ToChapter(Chapter c, IReadOnlyDictionary<Guid, ReadingProgress> progress)
     {
@@ -381,6 +431,7 @@ public static class LibraryEndpoints
             c.Number,
             c.NumberSort,
             c.Volume,
+            c.VolumeSort,
             c.Title,
             c.ActiveArtifactId is not null,
             activeGroup,
@@ -390,6 +441,7 @@ public static class LibraryEndpoints
             c.Releases
                 .OrderByDescending(r => r.PublishedAt)
                 .Select(r => new ReleaseDto(r.Id, r.ScanlationGroups, r.GroupKey, r.IsExternal, r.PublishedAt, r.PageCount))
-                .ToList());
+                .ToList(),
+            activeRelease?.SourceId == LocalSourceConstants.SourceId);
     }
 }

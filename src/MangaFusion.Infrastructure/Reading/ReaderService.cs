@@ -130,7 +130,7 @@ public sealed class ReaderService(
     {
         var chapter = await db.Chapters
             .Where(c => c.Id == chapterId)
-            .Select(c => new { c.SeriesId, c.Language })
+            .Select(c => new { c.SeriesId, c.Language, c.Series.SortMode })
             .FirstOrDefaultAsync(ct);
         if (chapter is null)
         {
@@ -141,12 +141,18 @@ public sealed class ReaderService(
         // ORDER BY the decimal NumberSort reliably.
         var siblings = await db.Chapters
             .Where(c => c.SeriesId == chapter.SeriesId && c.Language == chapter.Language && c.ActiveArtifactId != null)
-            .Select(c => new { c.Id, c.NumberSort, c.NumberKey })
+            .Select(c => new { c.Id, c.Number, c.NumberSort, c.NumberKey, c.VolumeSort })
             .ToListAsync(ct);
 
-        var ordered = siblings
-            .OrderBy(c => c.NumberSort ?? decimal.MaxValue)
-            .ThenBy(c => c.NumberKey, StringComparer.Ordinal)
+        var ordered = (chapter.SortMode == ChapterSortMode.VolumeThenChapter
+                ? siblings
+                    .OrderBy(c => c.VolumeSort ?? decimal.MaxValue)
+                    .ThenBy(c => c.Number == null ? 0 : 1)
+                    .ThenBy(c => c.NumberSort ?? decimal.MaxValue)
+                    .ThenBy(c => c.NumberKey, StringComparer.Ordinal)
+                : siblings
+                    .OrderBy(c => c.NumberSort ?? decimal.MaxValue)
+                    .ThenBy(c => c.NumberKey, StringComparer.Ordinal))
             .ToList();
 
         var i = ordered.FindIndex(c => c.Id == chapterId);
@@ -242,13 +248,14 @@ public sealed class ReaderService(
                 c.NumberKey,
                 c.Number,
                 c.Volume,
+                c.VolumeSort,
                 PageCount = c.ActiveArtifact!.PageCount,
             })
             .ToListAsync(ct);
 
         var seriesInfo = await db.Series
             .Where(s => candidates.Contains(s.Id))
-            .Select(s => new { s.Id, s.Title, s.CoverPath })
+            .Select(s => new { s.Id, s.Title, s.CoverPath, s.SortMode })
             .ToDictionaryAsync(s => s.Id, ct);
 
         var progressByChapter = progress.ToDictionary(p => p.ChapterId, p => (p.PageIndex, p.Completed));
@@ -272,10 +279,17 @@ public sealed class ReaderService(
                     .Select(g => g.Key).FirstOrDefault()
                 ?? "en";
 
-            var next = chapters
-                .Where(c => c.SeriesId == seriesId && c.Language == lang)
-                .OrderBy(c => c.NumberSort ?? decimal.MaxValue)
-                .ThenBy(c => c.NumberKey, StringComparer.Ordinal)
+            var seriesLangChapters = chapters.Where(c => c.SeriesId == seriesId && c.Language == lang);
+            var orderedLangChapters = info.SortMode == ChapterSortMode.VolumeThenChapter
+                ? seriesLangChapters
+                    .OrderBy(c => c.VolumeSort ?? decimal.MaxValue)
+                    .ThenBy(c => c.Number == null ? 0 : 1)
+                    .ThenBy(c => c.NumberSort ?? decimal.MaxValue)
+                    .ThenBy(c => c.NumberKey, StringComparer.Ordinal)
+                : seriesLangChapters
+                    .OrderBy(c => c.NumberSort ?? decimal.MaxValue)
+                    .ThenBy(c => c.NumberKey, StringComparer.Ordinal);
+            var next = orderedLangChapters
                 .FirstOrDefault(c => !progressByChapter.TryGetValue(c.Id, out var p) || !p.Completed);
             if (next is null)
             {

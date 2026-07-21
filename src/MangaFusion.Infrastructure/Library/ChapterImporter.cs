@@ -38,7 +38,8 @@ public sealed class ChapterImporter(AppDbContext db)
             // Pass the title as a last-resort dedup discriminator: scraped sources frequently expose
             // number-less named chapters ("Prologue", "Extra"), which would otherwise all collapse onto
             // the shared "oneshot" key and hide every one but the first (see ChapterNumber.Normalize).
-            var (sort, key) = ChapterNumber.Normalize(sc.Number, title: sc.Title);
+            var (sort, rawKey) = ChapterNumber.Normalize(sc.Number, sc.Volume, sc.Title);
+            var key = ChapterNumber.QualifyKey(series.SortMode, rawKey, sc.Volume);
             var chapterKey = (sc.Language, key);
             if (!existingChapters.TryGetValue(chapterKey, out var chapter))
             {
@@ -50,6 +51,7 @@ public sealed class ChapterImporter(AppDbContext db)
                     NumberSort = sort,
                     NumberKey = key,
                     Volume = sc.Volume,
+                    VolumeSort = ChapterNumber.VolumeSort(sc.Volume),
                     Title = sc.Title,
                 };
                 series.Chapters.Add(chapter);

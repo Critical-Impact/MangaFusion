@@ -88,7 +88,9 @@ public class ChapterConfiguration : IEntityTypeConfiguration<Chapter>
         builder.ToTable("Chapters");
         builder.HasKey(x => x.Id);
         builder.Property(x => x.Language).HasMaxLength(16).IsRequired();
-        builder.Property(x => x.NumberKey).HasMaxLength(64).IsRequired();
+        // 128, not 64: a VolumeThenChapter-mode series' key is volume-qualified ("{volume}:{key}"),
+        // which can exceed the old limit for a long title-derived key.
+        builder.Property(x => x.NumberKey).HasMaxLength(128).IsRequired();
         builder.HasIndex(x => new { x.SeriesId, x.Language, x.NumberKey }).IsUnique();
 
         builder.HasMany(x => x.Releases).WithOne(x => x.Chapter)

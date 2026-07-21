@@ -22,6 +22,12 @@ public class Chapter
     public string NumberKey { get; set; } = default!;
 
     public string? Volume { get; set; }
+
+    /// <summary>Sortable numeric form of <see cref="Volume"/> (null when unparseable/absent). Only
+    /// used for ordering when the series' <see cref="Series.SortMode"/> is
+    /// <see cref="ChapterSortMode.VolumeThenChapter"/> — otherwise unused.</summary>
+    public decimal? VolumeSort { get; set; }
+
     public string? Title { get; set; }
 
     /// <summary>The artifact currently providing this chapter for reading (null = not downloaded).</summary>
