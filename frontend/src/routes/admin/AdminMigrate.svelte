@@ -152,6 +152,20 @@
   function regimeClass(r: string) {
     return r === 'Live' ? 'text-ok' : r === 'Purged' ? 'text-warn' : r === 'Mixed' ? 'text-warn' : 'text-err-soft'
   }
+  // A "clean match" is a NeedsReview series with no conflict and a confident regime — it needs no
+  // human input and can go through "Commit all clean matches", so the UI should call it out as such
+  // instead of showing the raw "NeedsReview" enum name.
+  function isCleanMatch(s: MigrationSeriesDetail) {
+    return s.status === 'NeedsReview' && !s.conflictReason && s.regime !== 'Unmatched'
+  }
+  function seriesStatusLabel(s: MigrationSeriesDetail) {
+    if (isCleanMatch(s)) return 'Clean Match'
+    return s.status === 'NeedsReview' ? 'Needs Review' : s.status
+  }
+  function seriesStatusClass(s: MigrationSeriesDetail) {
+    if (isCleanMatch(s)) return 'text-ok'
+    return statusClass(s.status)
+  }
   function statusClass(s: string) {
     return s === 'Committed' ? 'text-ok' : s === 'Failed' ? 'text-err-soft' : s === 'NeedsReview' ? 'text-warn' : ''
   }
@@ -185,11 +199,7 @@
     batch ? batch.series.filter((s) => showCommitted || s.status !== 'Committed') : [],
   )
   let committedCount = $derived(batch ? batch.series.filter((s) => s.status === 'Committed').length : 0)
-  let readyCount = $derived(
-    batch
-      ? batch.series.filter((s) => s.status === 'NeedsReview' && !s.conflictReason && s.regime !== 'Unmatched').length
-      : 0,
-  )
+  let readyCount = $derived(batch ? batch.series.filter(isCleanMatch).length : 0)
   let rankingOnlyCount = $derived(
     batch ? batch.series.filter((s) => s.status !== 'Committed' && s.hasRankingOnlyConflict).length : 0,
   )
@@ -344,8 +354,8 @@
               {regimeLabel(s.regime)}
             </span>
             {#if s.regime !== 'Unmatched'}<span class="text-[0.75rem] text-text-mute">{Math.round(s.confidence * 100)}%</span>{/if}
-            <span class="rounded-[var(--r-pill)] border border-current px-[0.5rem] py-[0.1rem] text-[0.72rem] {statusClass(s.status)}">
-              {s.status}
+            <span class="rounded-[var(--r-pill)] border border-current px-[0.5rem] py-[0.1rem] text-[0.72rem] {seriesStatusClass(s)}">
+              {seriesStatusLabel(s)}
             </span>
           </button>
 
