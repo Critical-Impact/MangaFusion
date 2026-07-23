@@ -10,6 +10,7 @@
     setImportTitleOverride,
     setImportItem,
     commitImportSeries,
+    resetStuckImportSeriesCommit,
     searchImportCandidates,
     getSeries,
     getLibraryTitles,
@@ -466,6 +467,24 @@
                       }%`}
                     ></div>
                   </div>
+                </div>
+              {/if}
+
+              {#if s.commitJobCrashed}
+                <div class="flex flex-col items-start gap-[0.4rem] text-[0.8rem]">
+                  <span class="text-err-soft">
+                    This series' commit job appears to have crashed (the app may have restarted mid-commit) —
+                    it isn't coming back on its own. Check for a partial write before retrying.
+                  </span>
+                  <Button
+                    variant="destructive"
+                    size="mini"
+                    onclick={() => act(s.id + ':reset-commit', () => resetStuckImportSeriesCommit(s.id))}
+                    disabled={busy[s.id + ':reset-commit']}
+                  >
+                    {#if busy[s.id + ':reset-commit']}<Spinner />{/if}
+                    Reset stuck commit
+                  </Button>
                 </div>
               {/if}
 

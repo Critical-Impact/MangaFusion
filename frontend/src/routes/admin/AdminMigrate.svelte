@@ -10,6 +10,8 @@
       setMigrationItemDisposition,
       commitMigrationSeries,
       commitAllCleanMigrationSeries,
+      cancelCommitAllCleanMigration,
+      resetStuckMigrationSeriesCommit,
       clearRankingConflicts,
       searchSeries,
       getSeries,
@@ -287,6 +289,18 @@
       busy['commit-all'] = false
     }
   }
+
+  // Stops the bulk "commit all clean" job — cooperative (takes effect between series, not mid-write) if
+  // it's still running, or just resets the stuck state directly if it's already crashed. Not offered for
+  // a single-series commit (see AdminMigrate's toggle()) — the top-level batch progress this button sits
+  // next to is specifically the bulk job's.
+  async function cancelBulkCommit() {
+    if (!batch) return
+    await act('cancel-commit', async () => {
+      await cancelCommitAllCleanMigration(batch!.id)
+      notify.success('Bulk commit cancelled.')
+    })
+  }
 </script>
 
 <div class="flex flex-col gap-4">
@@ -346,10 +360,15 @@
       {/if}
     </section>
 
-    {#if committing}
+    {#if committing && batch.commitSeriesTotal != null}
       {@const bp = batchProgress(batch)}
-      {#if bp && bp.seriesTotal > 0}
-        <div class="flex flex-col gap-[0.3rem] text-[0.8rem] text-text-dim">
+      <div class="flex flex-col items-start gap-[0.4rem] text-[0.8rem] text-text-dim">
+        {#if batch.commitJobCrashed}
+          <span class="text-err-soft">
+            This bulk commit's background job appears to have crashed (the app may have restarted mid-commit) —
+            it isn't coming back on its own.
+          </span>
+        {:else if bp && bp.seriesTotal > 0}
           <span>Committing — series {bp.seriesDone}/{bp.seriesTotal}</span>
           <div class="h-[0.4rem] w-full overflow-hidden rounded-full bg-border">
             <div
@@ -357,8 +376,12 @@
               style={`width: ${Math.round((bp.seriesDone / bp.seriesTotal) * 100)}%`}
             ></div>
           </div>
-        </div>
-      {/if}
+        {/if}
+        <Button variant="destructive" size="mini" onclick={cancelBulkCommit} disabled={busy['cancel-commit']}>
+          {#if busy['cancel-commit']}<Spinner />{/if}
+          {batch.commitJobCrashed ? 'Reset stuck commit' : 'Cancel commit'}
+        </Button>
+      </div>
     {/if}
 
     {#if batch.series.length === 0 && batch.status !== 'Scanning'}
@@ -402,6 +425,23 @@
                     </div>
                   </div>
                 {/if}
+              {/if}
+              {#if s.commitJobCrashed}
+                <div class="flex flex-col items-start gap-[0.4rem] text-[0.8rem]">
+                  <span class="text-err-soft">
+                    This series' commit job appears to have crashed (the app may have restarted mid-commit) —
+                    it isn't coming back on its own. Check for a partial write before retrying.
+                  </span>
+                  <Button
+                    variant="destructive"
+                    size="mini"
+                    onclick={() => act(s.id + ':reset-commit', () => resetStuckMigrationSeriesCommit(s.id))}
+                    disabled={busy[s.id + ':reset-commit']}
+                  >
+                    {#if busy[s.id + ':reset-commit']}<Spinner />{/if}
+                    Reset stuck commit
+                  </Button>
+                </div>
               {/if}
               {#if s.committedLibrarySeriesId}
                 <a class="text-[0.8rem] text-brand-soft no-underline" href={`/library/${s.committedLibrarySeriesId}`} use:link>

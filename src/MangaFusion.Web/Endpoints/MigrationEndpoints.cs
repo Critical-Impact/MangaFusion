@@ -18,6 +18,8 @@ public static class MigrationEndpoints
         group.MapPatch("/items/{id:guid}", SetItemDisposition);
         group.MapPost("/series/{id:guid}/commit", CommitSeries);
         group.MapPost("/batches/{id:guid}/commit-clean", CommitAllClean);
+        group.MapPost("/batches/{id:guid}/cancel-commit", CancelCommitAllClean);
+        group.MapPost("/series/{id:guid}/reset-stuck-commit", ResetStuckSeriesCommit);
         group.MapPost("/series/{id:guid}/clear-conflict", ClearConflict);
         group.MapPost("/batches/{id:guid}/clear-ranking-conflicts", ClearRankingConflicts);
         group.MapDelete("/series/{id:guid}", RemoveSeries);
@@ -112,6 +114,32 @@ public static class MigrationEndpoints
         try
         {
             await migration.StartCommitAllCleanAsync(id, ct);
+            return Results.NoContent();
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(new { error = ex.Message });
+        }
+    }
+
+    private static async Task<IResult> CancelCommitAllClean(Guid id, IMigrationService migration, CancellationToken ct)
+    {
+        try
+        {
+            await migration.CancelCommitAllCleanAsync(id, ct);
+            return Results.NoContent();
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(new { error = ex.Message });
+        }
+    }
+
+    private static async Task<IResult> ResetStuckSeriesCommit(Guid id, IMigrationService migration, CancellationToken ct)
+    {
+        try
+        {
+            await migration.ResetStuckSeriesCommitAsync(id, ct);
             return Results.NoContent();
         }
         catch (InvalidOperationException ex)

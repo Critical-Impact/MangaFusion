@@ -56,6 +56,7 @@ public class InfrastructureModule : Module
         builder.RegisterType<MigrationScanner>().AsSelf().SingleInstance();
         builder.RegisterType<MigrationMatcher>().AsSelf().InstancePerLifetimeScope();
         builder.RegisterType<MigrationCommitter>().AsSelf().InstancePerLifetimeScope();
+        builder.RegisterType<CommitJobHealth>().AsSelf().SingleInstance();
         // AsSelf too: Hangfire's job activator resolves the concrete type (jobs.Enqueue<MigrationService>(...)).
         builder.RegisterType<MigrationService>().AsSelf().As<IMigrationService>().InstancePerLifetimeScope();
 

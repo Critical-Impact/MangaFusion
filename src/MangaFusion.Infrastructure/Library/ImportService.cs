@@ -16,6 +16,7 @@ public sealed class ImportService(
     ImportScanner scanner,
     IBackgroundJobClient jobs,
     ILibraryNotifier notifier,
+    CommitJobHealth jobHealth,
     ILogger<ImportService> logger) : IImportService
 {
     public async Task<Guid> StartScanAsync(MediaKind kind, CancellationToken ct = default)
@@ -257,7 +258,9 @@ public sealed class ImportService(
         importSeries.CommitError = null;
         await db.SaveChangesAsync(ct);
 
-        jobs.Enqueue<ImportService>(s => s.RunCommitAsync(importSeriesId, CancellationToken.None));
+        var jobId = jobs.Enqueue<ImportService>(s => s.RunCommitAsync(importSeriesId, CancellationToken.None));
+        importSeries.HangfireJobId = jobId;
+        await db.SaveChangesAsync(ct);
     }
 
     [AutomaticRetry(Attempts = 0)]
@@ -267,6 +270,10 @@ public sealed class ImportService(
         try
         {
             await committer.CommitAsync(importSeries, ct);
+            // CommitAsync already saved Status = Committed; this is a separate save so a successful
+            // commit doesn't leave a stale (but harmless) job id sitting on an otherwise-done series.
+            importSeries.HangfireJobId = null;
+            await db.SaveChangesAsync(ct);
         }
         catch (Exception ex)
         {
@@ -280,6 +287,7 @@ public sealed class ImportService(
             importSeries.CommitItemsTotal = null;
             importSeries.CommitPageDone = null;
             importSeries.CommitPageTotal = null;
+            importSeries.HangfireJobId = null;
             await db.SaveChangesAsync(CancellationToken.None);
 
             try
@@ -297,6 +305,36 @@ public sealed class ImportService(
             // an actual retry attempt.
             throw;
         }
+    }
+
+    /// <summary>Recovers a series stuck at Committing because its Hangfire commit job crashed (e.g. the
+    /// app restarted mid-commit, so nothing ever ran RunCommitAsync's catch block) — same recovery as a
+    /// normal commit failure. Throws if there's no commit in flight or its job still looks alive.</summary>
+    public async Task ResetStuckCommitAsync(Guid importSeriesId, CancellationToken ct = default)
+    {
+        var importSeries = await LoadSeriesAsync(importSeriesId, ct);
+
+        if (importSeries.Status != ImportSeriesStatus.Committing)
+        {
+            throw new InvalidOperationException("This series isn't currently committing.");
+        }
+
+        if (importSeries.HangfireJobId is not null && !jobHealth.IsCrashed(importSeries.HangfireJobId))
+        {
+            throw new InvalidOperationException(
+                "This series' commit job still looks alive — it isn't cancellable while running.");
+        }
+
+        importSeries.Status = ImportSeriesStatus.NeedsReview;
+        importSeries.CommitError = "Commit job crashed (the app likely restarted mid-commit) — check for partial writes before retrying.";
+        importSeries.CommitItemsDone = null;
+        importSeries.CommitItemsTotal = null;
+        importSeries.CommitPageDone = null;
+        importSeries.CommitPageTotal = null;
+        importSeries.HangfireJobId = null;
+        await db.SaveChangesAsync(ct);
+        logger.LogWarning(
+            "Import commit for series {ImportSeriesId} had already crashed; reset to NeedsReview.", importSeriesId);
     }
 
     // --- internals -------------------------------------------------------------------------------
@@ -363,17 +401,18 @@ public sealed class ImportService(
         _ => throw new ArgumentOutOfRangeException(nameof(kind)),
     };
 
-    private static ImportBatchDetail ToDetail(ImportBatch batch) => new(
+    private ImportBatchDetail ToDetail(ImportBatch batch) => new(
         batch.Id, batch.CreatedAt, batch.Status.ToString(), batch.Error,
         batch.Series.Select(ToDetail).ToList(),
         batch.Kind.ToString(),
         ImportMatcher.SourceFor(batch.Kind));
 
-    private static ImportSeriesDetail ToDetail(ImportSeries s) => new(
+    private ImportSeriesDetail ToDetail(ImportSeries s) => new(
         s.Id, s.GroupTitle, s.MatchedSourceSeriesId, s.MatchedTitle, s.TitleOverride, s.Status.ToString(),
         s.ExistingLibrarySeriesId, s.CommittedLibrarySeriesId,
         s.CommitItemsDone, s.CommitItemsTotal, s.CommitPageDone, s.CommitPageTotal, s.CommitError,
-        s.Items.OrderBy(i => i.FileName, StringComparer.OrdinalIgnoreCase).Select(ToDetail).ToList());
+        s.Items.OrderBy(i => i.FileName, StringComparer.OrdinalIgnoreCase).Select(ToDetail).ToList(),
+        s.Status == ImportSeriesStatus.Committing && jobHealth.IsCrashed(s.HangfireJobId));
 
     private static ImportItemDetail ToDetail(ImportItem i) => new(
         i.Id, i.FolderName, i.FileName, i.Format.ToString(), i.ParsedVolume, i.PageCount, i.SizeBytes,

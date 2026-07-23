@@ -34,12 +34,21 @@ public sealed record MigrationSeriesDetail(
     IReadOnlyList<string> GroupRanking,
     IReadOnlyList<MigrationItemDetail> Items,
     int? CommitItemsDone,
-    int? CommitItemsTotal);
+    int? CommitItemsTotal,
+    /// <summary>True when Status is "Committing" but the background job behind it is no longer
+    /// actually running (e.g. the app restarted mid-commit) — nothing is coming back to finish this
+    /// series, so <see cref="IMigrationService.ResetStuckSeriesCommitAsync"/> is offered instead of
+    /// waiting on progress that will never arrive.</summary>
+    bool CommitJobCrashed);
 
 public sealed record MigrationBatchDetail(
     Guid Id, DateTimeOffset CreatedAt, string Status, string? Error,
     IReadOnlyList<string> DivertedFolders, IReadOnlyList<MigrationSeriesDetail> Series,
-    int? CommitSeriesDone, int? CommitSeriesTotal);
+    int? CommitSeriesDone, int? CommitSeriesTotal,
+    /// <summary>Same crash detection as <see cref="MigrationSeriesDetail.CommitJobCrashed"/>, for the
+    /// bulk "commit all clean" job — <see cref="IMigrationService.CancelCommitAllCleanAsync"/> both
+    /// cancels a still-running bulk commit and recovers a crashed one.</summary>
+    bool CommitJobCrashed);
 
 /// <summary>Migrates CBZ files from an old (non-MangaFusion) downloader's inbox layout — one
 /// subfolder per series, one file per chapter — into the library. Scans + matches against MangaDex
@@ -93,9 +102,26 @@ public interface IMigrationService
     /// one series is recorded on it and doesn't stop the rest.</summary>
     Task StartCommitAllCleanAsync(Guid batchId, CancellationToken ct = default);
 
-    /// <summary>Hangfire job entry point for <see cref="StartCommitAllCleanAsync"/> — not normally called
-    /// directly.</summary>
-    Task RunCommitAllCleanAsync(Guid batchId, CancellationToken ct);
+    // No RunCommitAllCleanAsync declared here (unlike the other Run* job entry points above): making it
+    // genuinely cancellable needs a Hangfire-specific IJobCancellationToken parameter, which this
+    // Hangfire-agnostic Application interface shouldn't depend on. Hangfire enqueues it against the
+    // concrete MigrationService class directly (see StartCommitAllCleanAsync's implementation), the same
+    // way it always resolves the concrete type rather than the interface for job activation.
+
+    /// <summary>Stops the batch's in-flight bulk commit: if its Hangfire job is still actually running,
+    /// cooperatively cancels it between series (already-committed series keep their status; the rest
+    /// stay NeedsReview — the job's own cancellation handling does this once it notices, same as a
+    /// graceful shutdown mid-commit). If the job has already crashed — e.g. the app restarted mid-commit,
+    /// so nothing ever cleared Committing — resets the batch's stuck state directly instead. Throws if
+    /// the batch isn't currently committing.</summary>
+    Task CancelCommitAllCleanAsync(Guid batchId, CancellationToken ct = default);
+
+    /// <summary>Recovers a single series stuck at Committing because its commit job crashed (see
+    /// <see cref="MigrationSeriesDetail.CommitJobCrashed"/>) — reverts it to NeedsReview so it can be
+    /// retried. Throws if the series isn't currently committing, or if its job still looks alive (a
+    /// single-series commit isn't cancellable while genuinely running — only a confirmed-dead one can be
+    /// reset).</summary>
+    Task ResetStuckSeriesCommitAsync(Guid migrationSeriesId, CancellationToken ct = default);
 
     /// <summary>Clears the conflict status on a series that is to be migrated.</summary>
     Task ClearConflictAsync(Guid migrationSeriesId, CancellationToken ct = default);

@@ -17,6 +17,7 @@ public sealed class MigrationService(
     MigrationScanner scanner,
     IBackgroundJobClient jobs,
     ILibraryNotifier notifier,
+    CommitJobHealth jobHealth,
     ILogger<MigrationService> logger) : IMigrationService
 {
     public async Task<Guid> StartScanAsync(CancellationToken ct = default)
@@ -215,7 +216,9 @@ public sealed class MigrationService(
         migrationSeries.Batch.Status = MigrationBatchStatus.Committing;
         await db.SaveChangesAsync(ct);
 
-        jobs.Enqueue<MigrationService>(s => s.RunCommitSeriesAsync(migrationSeriesId, CancellationToken.None));
+        var jobId = jobs.Enqueue<MigrationService>(s => s.RunCommitSeriesAsync(migrationSeriesId, CancellationToken.None));
+        migrationSeries.HangfireJobId = jobId;
+        await db.SaveChangesAsync(ct);
     }
 
     [AutomaticRetry(Attempts = 0)]
@@ -233,6 +236,7 @@ public sealed class MigrationService(
         catch (OperationCanceledException)
         {
             // Graceful shutdown mid-commit — leave the series NeedsReview to retry, don't mark it Failed.
+            migrationSeries.HangfireJobId = null;
             batch.Status = MigrationBatchStatus.Done;
             await db.SaveChangesAsync(CancellationToken.None);
             throw;
@@ -247,6 +251,7 @@ public sealed class MigrationService(
                 migrationSeries.Id, migrationSeries.FolderName);
         }
 
+        migrationSeries.HangfireJobId = null;
         batch.Status = MigrationBatchStatus.Done;
         await db.SaveChangesAsync(CancellationToken.None);
     }
@@ -262,7 +267,9 @@ public sealed class MigrationService(
         batch.Status = MigrationBatchStatus.Committing;
         await db.SaveChangesAsync(ct);
 
-        jobs.Enqueue<MigrationService>(s => s.RunCommitAllCleanAsync(batchId, CancellationToken.None));
+        var jobId = jobs.Enqueue<MigrationService>(s => s.RunCommitAllCleanAsync(batchId, JobCancellationToken.Null));
+        batch.HangfireJobId = jobId;
+        await db.SaveChangesAsync(ct);
     }
 
     /// <summary>Commits every not-yet-committed, unambiguous series in a batch — the same "clean"
@@ -270,10 +277,17 @@ public sealed class MigrationService(
     /// <see cref="ProcessFolderAsync"/>) — so the (usually large) no-conflict majority can be cleared
     /// in one action after reviewing/fixing the flagged ones. A failure on one series is recorded on
     /// it (<see cref="MigrationSeriesStatus.Failed"/>, error as <see cref="MigrationSeries.ConflictReason"/>)
-    /// and doesn't stop the rest. Hangfire job entry point.</summary>
+    /// and doesn't stop the rest. Hangfire job entry point — not declared on <see cref="IMigrationService"/>
+    /// (see the comment there), called directly against this concrete class.
+    ///
+    /// <paramref name="jobToken"/> is Hangfire's cooperative-cancellation hook: it's auto-injected at
+    /// execution time (the <c>JobCancellationToken.Null</c> passed at enqueue is just a placeholder for
+    /// the compiler), and <see cref="IMigrationService.CancelCommitAllCleanAsync"/> triggers it by
+    /// deleting this job id — <c>ThrowIfCancellationRequested</c> below notices between series.</summary>
     [AutomaticRetry(Attempts = 0)]
-    public async Task RunCommitAllCleanAsync(Guid batchId, CancellationToken ct)
+    public async Task RunCommitAllCleanAsync(Guid batchId, IJobCancellationToken jobToken)
     {
+        var ct = jobToken.ShutdownToken;
         var batch = await db.MigrationBatches.FirstOrDefaultAsync(b => b.Id == batchId, ct);
         if (batch is null)
         {
@@ -298,14 +312,14 @@ public sealed class MigrationService(
 
             foreach (var series in clean)
             {
-                ct.ThrowIfCancellationRequested();
+                jobToken.ThrowIfCancellationRequested();
                 try
                 {
                     await committer.CommitAsync(series, ct);
                 }
                 catch (OperationCanceledException)
                 {
-                    throw; // shutdown/abort — leave this series NeedsReview, don't record it as Failed
+                    throw; // shutdown/abort/cancel — leave this series NeedsReview, don't record it as Failed
                 }
                 catch (Exception ex)
                 {
@@ -326,15 +340,18 @@ public sealed class MigrationService(
             batch.Status = MigrationBatchStatus.Done;
             batch.CommitSeriesDone = null;
             batch.CommitSeriesTotal = null;
+            batch.HangfireJobId = null;
             await db.SaveChangesAsync(ct);
         }
         catch (OperationCanceledException)
         {
-            // Interrupted (shutdown): reset to Done so the batch stays reviewable/retryable rather than
-            // stuck in Committing; already-committed series keep their status, the rest stay NeedsReview.
+            // Interrupted (shutdown or an admin's Cancel): reset to Done so the batch stays reviewable/
+            // retryable rather than stuck in Committing; already-committed series keep their status, the
+            // rest stay NeedsReview.
             batch.Status = MigrationBatchStatus.Done;
             batch.CommitSeriesDone = null;
             batch.CommitSeriesTotal = null;
+            batch.HangfireJobId = null;
             await db.SaveChangesAsync(CancellationToken.None);
             throw;
         }
@@ -344,9 +361,81 @@ public sealed class MigrationService(
             batch.Error = ex.Message;
             batch.CommitSeriesDone = null;
             batch.CommitSeriesTotal = null;
+            batch.HangfireJobId = null;
             logger.LogError(ex, "Migration bulk commit failed for batch {BatchId}.", batchId);
             await db.SaveChangesAsync(CancellationToken.None);
         }
+    }
+
+    public async Task CancelCommitAllCleanAsync(Guid batchId, CancellationToken ct = default)
+    {
+        var batch = await db.MigrationBatches.FirstOrDefaultAsync(b => b.Id == batchId, ct)
+            ?? throw new InvalidOperationException("Migration batch not found.");
+
+        if (batch.Status != MigrationBatchStatus.Committing)
+        {
+            throw new InvalidOperationException("No commit is currently running for this batch.");
+        }
+
+        if (batch.HangfireJobId is not null && !jobHealth.IsCrashed(batch.HangfireJobId))
+        {
+            // Deleting a currently-processing job signals its IJobCancellationToken — the job's own
+            // OperationCanceledException handling (above) finishes resetting the batch once it notices,
+            // between series rather than instantly, so a cancel while a large series is mid-write doesn't
+            // leave it half-written.
+            jobs.Delete(batch.HangfireJobId);
+            logger.LogInformation("Migration bulk commit for batch {BatchId} cancelled by admin.", batchId);
+            return;
+        }
+
+        // The job has already crashed (or its id was never recorded) — nothing left to signal, so reset
+        // the stuck state directly instead of waiting on a job that isn't coming back.
+        batch.Status = MigrationBatchStatus.Done;
+        batch.CommitSeriesDone = null;
+        batch.CommitSeriesTotal = null;
+        batch.HangfireJobId = null;
+        await db.SaveChangesAsync(ct);
+        logger.LogWarning(
+            "Migration bulk commit for batch {BatchId} had already crashed; reset to Done.", batchId);
+    }
+
+    /// <summary>A single-series commit (unlike the bulk one) has no <see cref="MigrationSeriesStatus"/>
+    /// value of its own for "committing" — only the batch's status flips to Committing, while the series
+    /// keeps whatever status it had and carries <see cref="MigrationSeries.HangfireJobId"/> +
+    /// CommitItems* progress for the duration. So "is a single-series commit in flight for this series"
+    /// is exactly "HangfireJobId is set".</summary>
+    public async Task ResetStuckSeriesCommitAsync(Guid migrationSeriesId, CancellationToken ct = default)
+    {
+        var migrationSeries = await LoadSeriesAsync(migrationSeriesId, ct);
+
+        if (migrationSeries.HangfireJobId is null)
+        {
+            throw new InvalidOperationException("This series has no commit currently in flight.");
+        }
+
+        if (!jobHealth.IsCrashed(migrationSeries.HangfireJobId))
+        {
+            throw new InvalidOperationException(
+                "This series' commit job still looks alive — it isn't cancellable while running.");
+        }
+
+        migrationSeries.Status = MigrationSeriesStatus.Failed;
+        migrationSeries.ConflictReason =
+            "Commit job crashed (the app likely restarted mid-commit) — check for partial writes before retrying.";
+        migrationSeries.CommitItemsDone = null;
+        migrationSeries.CommitItemsTotal = null;
+        migrationSeries.HangfireJobId = null;
+        // Only the batch's own bulk job (if any) owns clearing Committing when it's the one tracking a
+        // job id there; otherwise this single-series commit was what set it, so clear it here too.
+        if (migrationSeries.Batch.HangfireJobId is null)
+        {
+            migrationSeries.Batch.Status = MigrationBatchStatus.Done;
+        }
+
+        await db.SaveChangesAsync(ct);
+        logger.LogWarning(
+            "Migration commit for series {SeriesId} ({Folder}) had already crashed; reset to Failed.",
+            migrationSeriesId, migrationSeries.FolderName);
     }
 
     private async Task ReportBatchProgressAsync(Guid batchId, int seriesDone, int seriesTotal, CancellationToken ct)
@@ -595,18 +684,20 @@ public sealed class MigrationService(
         }
     }
 
-    private static MigrationBatchDetail ToDetail(MigrationBatch batch) => new(
+    private MigrationBatchDetail ToDetail(MigrationBatch batch) => new(
         batch.Id, batch.CreatedAt, batch.Status.ToString(), batch.Error,
         batch.DivertedFolders, batch.Series.Select(ToDetail).ToList(),
-        batch.CommitSeriesDone, batch.CommitSeriesTotal);
+        batch.CommitSeriesDone, batch.CommitSeriesTotal,
+        batch.Status == MigrationBatchStatus.Committing && jobHealth.IsCrashed(batch.HangfireJobId));
 
-    private static MigrationSeriesDetail ToDetail(MigrationSeries s) => new(
+    private MigrationSeriesDetail ToDetail(MigrationSeries s) => new(
         s.Id, s.FolderName, s.ComicInfoSeriesTitle, s.MatchedSourceSeriesId, s.MatchedTitle,
         s.Regime.ToString(), s.Confidence, s.Status.ToString(), s.ConflictReason,
         s.ConflictKind == MigrationConflictKind.PartialPurgeRanking,
         s.ExistingLibrarySeriesId, s.CommittedLibrarySeriesId, s.GroupRanking,
         s.Items.OrderBy(i => i.FileName, StringComparer.OrdinalIgnoreCase).Select(ToDetail).ToList(),
-        s.CommitItemsDone, s.CommitItemsTotal);
+        s.CommitItemsDone, s.CommitItemsTotal,
+        s.HangfireJobId is not null && jobHealth.IsCrashed(s.HangfireJobId));
 
     private static MigrationItemDetail ToDetail(MigrationItem i) => new(
         i.Id, i.FileName, i.UuidPrefix, i.Number, i.ChapterTitle, i.PageCount, i.SizeBytes,

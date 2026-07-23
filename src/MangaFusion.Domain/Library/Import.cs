@@ -96,6 +96,12 @@ public class ImportSeries
     /// Failed state) so the user can fix the issue and immediately retry.</summary>
     public string? CommitError { get; set; }
 
+    /// <summary>Hangfire job id of the in-flight commit (RunCommitAsync), set when it's enqueued and
+    /// cleared when it finishes in any way. Lets a genuinely crashed job (process died mid-commit, so
+    /// nothing ever cleared Status back off Committing) be told apart from one still legitimately
+    /// running, by checking this id's actual state in Hangfire's storage.</summary>
+    public string? HangfireJobId { get; set; }
+
     public List<ImportItem> Items { get; set; } = [];
 }
 

@@ -36,7 +36,12 @@ public sealed record ImportSeriesDetail(
     int? CommitPageDone,
     int? CommitPageTotal,
     string? CommitError,
-    IReadOnlyList<ImportItemDetail> Items);
+    IReadOnlyList<ImportItemDetail> Items,
+    /// <summary>True when Status is "Committing" but the background job behind it is no longer actually
+    /// running (e.g. the app restarted mid-commit) — nothing is coming back to finish this series, so
+    /// <see cref="IImportService.ResetStuckCommitAsync"/> is offered instead of waiting on progress that
+    /// will never arrive.</summary>
+    bool CommitJobCrashed);
 
 /// <summary>One ranked match candidate, shaped for the review UI.
 ///
@@ -120,4 +125,11 @@ public interface IImportService
     /// On failure, reverts the series to NeedsReview with <c>CommitError</c> set, rather than leaving
     /// it stuck at Committing or in a dead-end Failed state — the user can fix the issue and retry.</summary>
     Task RunCommitAsync(Guid importSeriesId, CancellationToken ct);
+
+    /// <summary>Recovers a series stuck at Committing because its commit job crashed (see
+    /// <see cref="ImportSeriesDetail.CommitJobCrashed"/>) — reverts it to NeedsReview so it can be
+    /// retried, same as a normal commit failure. Throws if the series isn't currently committing, or if
+    /// its job still looks alive (not cancellable while genuinely running — only a confirmed-dead job can
+    /// be reset).</summary>
+    Task ResetStuckCommitAsync(Guid importSeriesId, CancellationToken ct = default);
 }

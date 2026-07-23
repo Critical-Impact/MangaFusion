@@ -851,6 +851,9 @@ export interface MigrationSeriesDetail {
   items: MigrationItemDetail[]
   commitItemsDone: number | null
   commitItemsTotal: number | null
+  /** True when a commit is (was) running for this series but its Hangfire job is no longer actually
+   *  alive — e.g. the app restarted mid-commit — so nothing is coming back to finish it. */
+  commitJobCrashed: boolean
 }
 
 export interface MigrationBatchDetail {
@@ -862,6 +865,8 @@ export interface MigrationBatchDetail {
   series: MigrationSeriesDetail[]
   commitSeriesDone: number | null
   commitSeriesTotal: number | null
+  /** Same crash detection as MigrationSeriesDetail.commitJobCrashed, for the bulk "commit all clean" job. */
+  commitJobCrashed: boolean
 }
 
 export interface MigrationBatchSummary {
@@ -897,6 +902,16 @@ export const clearMigrationConflict = (seriesId: string) =>
 
 export const commitAllCleanMigrationSeries = (batchId: string) =>
   send<void>(`/api/migration/batches/${batchId}/commit-clean`, 'POST', {})
+
+// Stops the bulk commit if its job is still running (cooperative — takes effect between series, not
+// mid-write), or resets the batch's stuck state directly if the job has already crashed.
+export const cancelCommitAllCleanMigration = (batchId: string) =>
+  send<void>(`/api/migration/batches/${batchId}/cancel-commit`, 'POST', {})
+
+// Recovers a single series stuck at "Committing" because its commit job crashed. Rejected if the job
+// still looks alive — only a confirmed-dead one can be reset.
+export const resetStuckMigrationSeriesCommit = (seriesId: string) =>
+  send<void>(`/api/migration/series/${seriesId}/reset-stuck-commit`, 'POST', {})
 
 export const clearRankingConflicts = (batchId: string) =>
   send<{ clearedCount: number }>(`/api/migration/batches/${batchId}/clear-ranking-conflicts`, 'POST', {})
@@ -939,6 +954,9 @@ export interface ImportSeriesDetail {
   commitPageTotal: number | null
   commitError: string | null
   items: ImportItemDetail[]
+  /** True when Status is "Committing" but the Hangfire job behind it is no longer actually alive —
+   *  e.g. the app restarted mid-commit — so nothing is coming back to finish it. */
+  commitJobCrashed: boolean
 }
 
 export interface ImportBatchDetail {
@@ -1005,6 +1023,11 @@ export const setImportItem = (
 
 export const commitImportSeries = (seriesId: string) =>
   send<void>(`/api/import/series/${seriesId}/commit`, 'POST', {})
+
+// Recovers a series stuck at "Committing" because its commit job crashed. Rejected if the job still
+// looks alive — only a confirmed-dead one can be reset.
+export const resetStuckImportSeriesCommit = (seriesId: string) =>
+  send<void>(`/api/import/series/${seriesId}/reset-stuck-commit`, 'POST', {})
 
 // --- Notifications ---------------------------------------------------------------------------
 

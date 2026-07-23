@@ -20,6 +20,7 @@ public static class ImportEndpoints
         group.MapPatch("/series/{id:guid}/title", SetTitle);
         group.MapPatch("/items/{id:guid}", SetItem);
         group.MapPost("/series/{id:guid}/commit", CommitSeries);
+        group.MapPost("/series/{id:guid}/reset-stuck-commit", ResetStuckCommit);
     }
 
     private static async Task<IResult> StartScan(IImportService import, string? kind, CancellationToken ct)
@@ -114,6 +115,19 @@ public static class ImportEndpoints
         try
         {
             await import.StartCommitAsync(id, ct);
+            return Results.NoContent();
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(new { error = ex.Message });
+        }
+    }
+
+    private static async Task<IResult> ResetStuckCommit(Guid id, IImportService import, CancellationToken ct)
+    {
+        try
+        {
+            await import.ResetStuckCommitAsync(id, ct);
             return Results.NoContent();
         }
         catch (InvalidOperationException ex)

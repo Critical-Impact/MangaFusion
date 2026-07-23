@@ -7,7 +7,7 @@ public enum MigrationBatchStatus
     Failed = 2,
     // A commit (single series or all-clean) is running in the background. Returns to Done when it
     // finishes; the UI polls the batch while it's in this state, same as it does for Scanning.
-    Committing = 3,
+    Committing = 3, 
 }
 
 /// <summary>Whether a series' chapters are still on the source (Live), have been purged from the
@@ -98,6 +98,13 @@ public class MigrationBatch
     public int? CommitSeriesDone { get; set; }
     public int? CommitSeriesTotal { get; set; }
 
+    /// <summary>Hangfire job id of the in-flight bulk commit (RunCommitAllCleanAsync), set when it's
+    /// enqueued and cleared when it finishes in any way. Lets the API cancel it (BackgroundJobClient.
+    /// Delete signals its IJobCancellationToken while processing) and tell a genuinely crashed job
+    /// (process died mid-commit, so nothing ever cleared Status back off Committing) apart from one
+    /// still legitimately running, by checking this id's actual state in Hangfire's storage.</summary>
+    public string? HangfireJobId { get; set; }
+
     /// <summary>Folder names moved into the import wizard's inbox instead of being scanned as
     /// migration candidates, because none of their files had a ComicInfo.xml — almost certainly not
     /// from the old MangaDex downloader this tool targets.</summary>
@@ -148,6 +155,11 @@ public class MigrationSeries
     // reconnect. Null outside of an in-flight commit. ---
     public int? CommitItemsDone { get; set; }
     public int? CommitItemsTotal { get; set; }
+
+    /// <summary>Hangfire job id of the in-flight single-series commit (RunCommitSeriesAsync), set when
+    /// it's enqueued and cleared when it finishes in any way — same crash-detection purpose as
+    /// <see cref="MigrationBatch.HangfireJobId"/>, at series granularity.</summary>
+    public string? HangfireJobId { get; set; }
 
     /// <summary>An existing library series to merge into instead of creating a new one. Its own
     /// metadata is never overwritten by the migration — only chapters/files are added.</summary>
