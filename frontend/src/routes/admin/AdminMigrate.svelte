@@ -56,8 +56,15 @@
   let libraryTitles = $state<{ id: string; title: string }[]>([])
 
   // Full MangaDex series detail (for its site URL), keyed by sourceSeriesId — migration always matches
-  // against MangaDex, so unlike AdminImport there's no per-batch source to look up.
+  // against MangaDex, so unlike AdminImport there's no per-batch source to look up. Loaded lazily (see
+  // loadMatchedDetail) the first time a row is expanded or a match is selected, not for the whole
+  // batch up front, so a large migration doesn't burst hundreds of requests against MangaDex's shared
+  // rate limit on page load.
   let matchedDetail = $state<Record<string, Series>>({})
+  // Plain (non-reactive) guard against re-requesting the same id. Must not be $state: reading it
+  // synchronously inside loadMatchedDetail would make a matchedDetail write re-run any $effect that
+  // happens to be on the call stack, which is what caused the request storm this replaced.
+  const requestedMatchDetail = new Set<string>()
 
   let timer: ReturnType<typeof setInterval> | undefined
 
@@ -115,8 +122,12 @@
     }, 2500)
   }
 
-  function toggle(seriesId: string) {
-    expanded[seriesId] = !expanded[seriesId]
+  // Fetches the matched series' MangaDex detail (for its site URL) lazily, the first time a row is
+  // expanded — not for the whole batch up front, which for a large migration (hundreds of series)
+  // would burst that many requests against MangaDex's shared rate limit all at once.
+  function toggle(s: MigrationSeriesDetail) {
+    expanded[s.id] = !expanded[s.id]
+    if (expanded[s.id] && s.matchedSourceSeriesId) loadMatchedDetail(s.matchedSourceSeriesId)
   }
 
   async function act(key: string, fn: () => Promise<unknown>) {
@@ -152,7 +163,8 @@
   }
 
   async function loadMatchedDetail(sourceSeriesId: string) {
-    if (matchedDetail[sourceSeriesId]) return
+    if (requestedMatchDetail.has(sourceSeriesId)) return
+    requestedMatchDetail.add(sourceSeriesId)
     try {
       matchedDetail[sourceSeriesId] = await getSeries('mangadex', sourceSeriesId)
     } catch {
@@ -218,15 +230,6 @@
     batch ? batch.series.filter((s) => s.status !== 'Committed' && s.hasRankingOnlyConflict).length : 0,
   )
 
-  // Eagerly fetch each matched series' MangaDex detail (for its site URL) as soon as the match is
-  // known, so "View match" is ready without the admin having to re-search first.
-  $effect(() => {
-    for (const s of visibleSeries) {
-      if (s.matchedSourceSeriesId) {
-        loadMatchedDetail(s.matchedSourceSeriesId)
-      }
-    }
-  })
   // A background commit is in flight for this batch — block starting another one (or a scan) meanwhile.
   let committing = $derived(batch?.status === 'Committing')
 
@@ -370,7 +373,7 @@
         <li class="overflow-hidden rounded-[var(--r-md)] border border-border">
           <button
             class="flex w-full items-center gap-[0.6rem] border-0 bg-[#1c1c24] px-[0.9rem] py-[0.6rem] text-left [font:inherit] text-foreground"
-            onclick={() => toggle(s.id)}
+            onclick={() => toggle(s)}
           >
             <span class="min-w-[10rem] text-[0.75rem] text-text-mute">{s.folderName}</span>
             <span class="flex-1 font-semibold">{s.matchedTitle ?? s.comicInfoSeriesTitle ?? '—'}</span>
@@ -459,7 +462,7 @@
                               variant="secondary"
                               size="mini"
                               disabled={busy[s.id + ':match']}
-                              onclick={() => act(s.id + ':match', () => setMigrationSeriesMatch(s.id, c.sourceSeriesId))}
+                              onclick={() => act(s.id + ':match', () => setMigrationSeriesMatch(s.id, c.sourceSeriesId)).then(() => loadMatchedDetail(c.sourceSeriesId))}
                             >
                               {s.matchedSourceSeriesId === c.sourceSeriesId ? 'Selected' : 'Select'}
                             </Button>

@@ -44,9 +44,15 @@
   let matchResults = $state<Record<string, ImportCandidate[]>>({})
   let libraryTitles = $state<{ id: string; title: string }[]>([])
 
-  // Full MangaUpdates series detail (for its alt-titles), keyed by sourceSeriesId, loaded lazily the
-  // first time the title-override picker for a matched series is opened.
+  // Full MangaUpdates series detail (for its alt-titles), keyed by sourceSeriesId — loaded lazily
+  // (see loadMatchedDetail) the first time a row is expanded or a match is selected, not for the
+  // whole batch up front, so a large import doesn't burst hundreds of requests against the source's
+  // shared rate limit on page load.
   let matchedDetail = $state<Record<string, Series>>({})
+  // Plain (non-reactive) guard against re-requesting the same id. Must not be $state: reading it
+  // synchronously inside loadMatchedDetail would make a matchedDetail write re-run any $effect that
+  // happens to be on the call stack, which is what caused the request storm this replaced.
+  const requestedMatchDetail = new Set<string>()
 
   // Per-item editable chapter-spec draft, keyed by import item id — mirrors AdminLocal's per-file
   // `imp` draft: freely editable, only sent on explicit save.
@@ -132,8 +138,12 @@
     }, 2500)
   }
 
-  function toggle(seriesId: string) {
-    expanded[seriesId] = !expanded[seriesId]
+  // Fetches the matched series' detail (for its alt-titles and site URL) lazily, the first time a row
+  // is expanded — not for the whole batch up front, which for a large import (hundreds of series)
+  // would burst that many requests against the source's shared rate limit all at once.
+  function toggle(s: ImportSeriesDetail) {
+    expanded[s.id] = !expanded[s.id]
+    if (expanded[s.id] && s.matchedSourceSeriesId) loadMatchedDetail(s.matchedSourceSeriesId)
   }
 
   async function act(key: string, fn: () => Promise<unknown>) {
@@ -173,6 +183,7 @@
     await act(series.id + ':match', () => setImportSeriesMatch(series.id, sourceSeriesId))
     // Selection made — the candidate list has done its job; collapse it back out of the way.
     matchResults[series.id] = []
+    loadMatchedDetail(sourceSeriesId)
   }
 
   async function loadLibraryTitles() {
@@ -185,7 +196,8 @@
   }
 
   async function loadMatchedDetail(sourceSeriesId: string) {
-    if (matchedDetail[sourceSeriesId]) return
+    if (requestedMatchDetail.has(sourceSeriesId)) return
+    requestedMatchDetail.add(sourceSeriesId)
     try {
       matchedDetail[sourceSeriesId] = await getSeries(matchSourceId, sourceSeriesId)
     } catch {
@@ -291,16 +303,6 @@
   )
   let committedCount = $derived(batch ? batch.series.filter((s) => s.status === 'Committed').length : 0)
 
-  // Eagerly (not lazily-on-dropdown-open) fetch alt-titles for every matched series as soon as it's
-  // known — including a match the scan pre-filled automatically — so "Title to use" already has its
-  // alternatives ready the first time it's opened, rather than only after a manual re-search/select.
-  $effect(() => {
-    for (const s of visibleSeries) {
-      if (s.matchedSourceSeriesId) {
-        loadMatchedDetail(s.matchedSourceSeriesId)
-      }
-    }
-  })
   const includedCount = (items: ImportItemDetail[]) => items.filter((i) => i.include).length
 
   // Mirrors the server's ChapterNumber.Normalize key just closely enough to warn before commit, not to
@@ -412,7 +414,7 @@
         <li class="overflow-hidden rounded-[var(--r-md)] border border-border">
           <button
             class="flex w-full items-center gap-[0.6rem] border-0 bg-[#1c1c24] px-[0.9rem] py-[0.6rem] text-left [font:inherit] text-foreground"
-            onclick={() => toggle(s.id)}
+            onclick={() => toggle(s)}
           >
             <span class="min-w-[10rem] text-[0.75rem] text-text-mute">{s.groupTitle}</span>
             <span class="flex-1 font-semibold">{s.titleOverride ?? s.matchedTitle ?? '— no match —'}</span>
