@@ -29,6 +29,8 @@ public enum ImportSourceFormat
     Cbz = 0,
     Folder = 1,
     Pdf = 2,
+    Cbr = 3,
+    Epub = 4,
 }
 
 /// <summary>One run of the MangaUpdates-assisted import wizard over the import inbox. One group of

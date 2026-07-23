@@ -50,7 +50,8 @@ public class ImportCommitterResumeTests : IDisposable
             [new CbzChapterWriter(TestPageEncoding.Resolver), new FolderChapterWriter(TestPageEncoding.Resolver)],
             _config);
         var chapterImporter = new ChapterFileImporter(
-            db, _paths, writers, new ArtifactFileInspector(), new PdfPageExtractor(_config));
+            db, _paths, writers, new ArtifactFileInspector(), new PdfPageExtractor(_config),
+            new CbrPageExtractor(), new EpubPageExtractor());
 
         // The unmatched-import path (no source match, no merge target) never reaches ILibraryService — and
         // it's the path that matters here, because it's the one that *creates* a series, so it's where a

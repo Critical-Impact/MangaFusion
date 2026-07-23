@@ -3,6 +3,7 @@ using System;
 using MangaFusion.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -10,9 +11,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace MangaFusion.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260723010836_AddSeriesCoverUpdatedAt")]
+    partial class AddSeriesCoverUpdatedAt
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "10.0.9");
@@ -793,9 +796,6 @@ namespace MangaFusion.Infrastructure.Persistence.Migrations
 
                     b.PrimitiveCollection<string>("PreferredGroups")
                         .IsRequired()
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("SiteUrl")
                         .HasColumnType("TEXT");
 
                     b.Property<int>("SortMode")

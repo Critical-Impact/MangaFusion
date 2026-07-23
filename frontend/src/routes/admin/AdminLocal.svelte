@@ -43,7 +43,9 @@
   const ratings = ['Unknown', 'Safe', 'Suggestive', 'Erotica', 'Pornographic']
   const statuses = ['Unknown', 'Ongoing', 'Completed', 'Hiatus', 'Cancelled']
 
-  const importable = $derived(inbox.filter((i) => i.kind === 'cbz' || i.kind === 'folder'))
+  const importable = $derived(
+    inbox.filter((i) => i.kind === 'cbz' || i.kind === 'cbr' || i.kind === 'epub' || i.kind === 'folder'),
+  )
   const covers = $derived(inbox.filter((i) => i.kind === 'image').map((i) => i.name))
 
   onMount(load)
@@ -196,7 +198,7 @@
     {/if}
 
     {#if importable.length === 0}
-      <p class="muted">No importable files in the inbox. Drop <code>.cbz</code> files or image folders into the configured inbox path.</p>
+      <p class="muted">No importable files in the inbox. Drop <code>.cbz</code>/<code>.cbr</code> files, image-based <code>.epub</code> files, or image folders into the configured inbox path.</p>
     {:else}
       <ul class="mt-[0.6rem] list-none overflow-hidden rounded-[var(--r-md)] border border-border p-0">
         {#each importable as f (f.name)}

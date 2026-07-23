@@ -27,10 +27,15 @@ internal static class MangaUpdatesMapper
             Status = MapStatus(dto.Status, dto.Completed),
             Year = int.TryParse(dto.Year, out var year) ? year : null,
             OriginalLanguage = MapOriginalLanguage(dto.Type),
+            SiteUrl = dto.Url,
         };
     }
 
-    public static SourceTag ToTag(GenreStatsDto dto) => new(dto.Id.ToString(), dto.Genre, "Genre");
+    // Lowercase to match every other source's group convention (MangaDex's "genre"/"theme"/..., ComicVine's
+    // "publisher"/"character"/"concept") — group is a stable filter-facet key, not display text, and a
+    // mismatched casing here used to create a second, visually-duplicate "Genre" tag group on any series
+    // whose genres got resolved by name against these pre-synced tags (see TagResolver.ResolveOrCreateByNameAsync).
+    public static SourceTag ToTag(GenreStatsDto dto) => new(dto.Id.ToString(), dto.Genre, "genre");
 
     private static PublicationStatus MapStatus(string? status, bool completed)
     {

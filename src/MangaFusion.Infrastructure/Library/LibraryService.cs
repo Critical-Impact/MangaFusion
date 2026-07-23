@@ -143,8 +143,8 @@ public sealed class LibraryService(
         var page = await q
             .Skip(query.Offset).Take(query.Limit)
             .Select(s => new LibraryListItem(
-                s.Id, s.Title, s.CoverPath, s.Tags.Select(t => t.Name).ToList(), s.Year, s.AddedAt,
-                s.Chapters.Count, s.SourceLinks.Select(l => l.SourceId).ToList()))
+                s.Id, s.Title, s.CoverPath, s.CoverUpdatedAt, s.Tags.Select(t => t.Name).ToList(), s.Year,
+                s.AddedAt, s.Chapters.Count, s.SourceLinks.Select(l => l.SourceId).ToList()))
             .ToListAsync(ct);
 
         return new LibraryPage(page, total);
@@ -602,6 +602,52 @@ public sealed class LibraryService(
         }
 
         series.SortMode = mode;
+        await db.SaveChangesAsync(ct);
+    }
+
+    public async Task UpdateSeriesMetadataAsync(
+        Guid seriesId, string title, int? year, string? description, CancellationToken ct = default)
+    {
+        var series = await db.Series.FirstOrDefaultAsync(s => s.Id == seriesId, ct)
+            ?? throw new InvalidOperationException("Series not found.");
+
+        series.Title = title.Trim();
+        series.Year = year;
+        series.Description = string.IsNullOrWhiteSpace(description) ? null : description.Trim();
+        series.LockedFields |= SeriesLockedFields.Title | SeriesLockedFields.Year | SeriesLockedFields.Description;
+        await db.SaveChangesAsync(ct);
+    }
+
+    public async Task UnlockMetadataAsync(Guid seriesId, CancellationToken ct = default)
+    {
+        var series = await db.Series.FirstOrDefaultAsync(s => s.Id == seriesId, ct)
+            ?? throw new InvalidOperationException("Series not found.");
+
+        series.LockedFields &= ~(SeriesLockedFields.Title | SeriesLockedFields.Year | SeriesLockedFields.Description);
+        await db.SaveChangesAsync(ct);
+    }
+
+    public async Task<bool> SetCustomCoverAsync(Guid seriesId, Stream image, CancellationToken ct = default)
+    {
+        var series = await db.Series.FirstOrDefaultAsync(s => s.Id == seriesId, ct)
+            ?? throw new InvalidOperationException("Series not found.");
+
+        if (!await coverCache.SetCustomCoverAsync(series, image, ct))
+        {
+            return false;
+        }
+
+        series.LockedFields |= SeriesLockedFields.Cover;
+        await db.SaveChangesAsync(ct);
+        return true;
+    }
+
+    public async Task UnlockCoverAsync(Guid seriesId, CancellationToken ct = default)
+    {
+        var series = await db.Series.FirstOrDefaultAsync(s => s.Id == seriesId, ct)
+            ?? throw new InvalidOperationException("Series not found.");
+
+        series.LockedFields &= ~SeriesLockedFields.Cover;
         await db.SaveChangesAsync(ct);
     }
 

@@ -99,15 +99,24 @@ public sealed class ImportScanner(ChapterFileImporter chapterImporter)
         foreach (var file in Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories)
                      .OrderBy(f => f, StringComparer.OrdinalIgnoreCase))
         {
-            var kind = file.EndsWith(".cbz", StringComparison.OrdinalIgnoreCase) ? ChapterSourceKind.Cbz
-                : file.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase) ? ChapterSourceKind.Pdf
-                : (ChapterSourceKind?)null;
+            var kind = ChapterSourceKindClassifier.FromFileName(file);
             if (kind is null)
             {
                 continue;
             }
 
-            var pages = chapterImporter.CountPages(file, kind.Value);
+            int pages;
+            try
+            {
+                pages = chapterImporter.CountPages(file, kind.Value);
+            }
+            catch (InvalidOperationException)
+            {
+                // e.g. an EPUB that turns out to be reflowable text rather than an image-based comic,
+                // or a corrupt archive — not importable, so skip it rather than failing the whole scan.
+                continue;
+            }
+
             if (pages == 0)
             {
                 continue;

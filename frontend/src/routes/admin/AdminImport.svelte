@@ -366,7 +366,7 @@
   <p class="text-[0.85rem] text-text-mute">
     Scans this library's import inbox for manually-sourced release folders (e.g. purchased digital volumes),
     suggests a metadata match for each, and imports them as chapters once you confirm (or correct) the match.
-    PDF and CBZ files are supported, one release per subfolder.
+    PDF, CBZ, CBR, and image-based EPUB files are supported, one release per subfolder.
   </p>
 
   <section class="flex items-center gap-[0.6rem]">
@@ -427,6 +427,17 @@
               {#if s.committedLibrarySeriesId}
                 <a class="text-[0.8rem] text-brand-soft no-underline" href={`/library/${s.committedLibrarySeriesId}`} use:link>
                   Open in library ↗
+                </a>
+              {/if}
+
+              {#if s.matchedSourceSeriesId && matchedDetail[s.matchedSourceSeriesId]?.siteUrl}
+                <a
+                  class="text-[0.8rem] text-brand-soft no-underline"
+                  href={matchedDetail[s.matchedSourceSeriesId].siteUrl}
+                  target="_blank"
+                  rel="noreferrer noopener"
+                >
+                  View match on {matchSourceName} ↗
                 </a>
               {/if}
 

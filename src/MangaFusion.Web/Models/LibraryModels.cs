@@ -44,12 +44,17 @@ public sealed record LibrarySeriesDetailDto(
     string? SourceId,
     string? SourceName,
     string? SourceSeriesId,
+    string? SiteUrl,
     bool Followed,
     bool FollowAutoDownload,
     IReadOnlyList<string> FollowLanguages,
     bool Reading,
     IReadOnlyList<LibraryChapterDto> Chapters,
-    string SortMode);
+    string SortMode,
+    bool TitleLocked,
+    bool YearLocked,
+    bool DescriptionLocked,
+    bool CoverLocked);
 
 public sealed record LibraryChapterDto(
     Guid Id,
@@ -68,6 +73,8 @@ public sealed record LibraryChapterDto(
     bool CanEdit);
 
 public sealed record UpdateChapterRequest(string? Number, string? Volume, string? Title);
+
+public sealed record UpdateSeriesMetadataRequest(string Title, int? Year, string? Description);
 
 public sealed record SetSortModeRequest(string SortMode);
 

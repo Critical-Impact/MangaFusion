@@ -20,6 +20,7 @@ internal sealed class SeriesModelDto
 {
     public long SeriesId { get; set; }
     public string Title { get; set; } = "";
+    public string? Url { get; set; }
     public List<AssociatedTitleDto>? Associated { get; set; }
     public string? Description { get; set; }
     public ImageModelDto? Image { get; set; }

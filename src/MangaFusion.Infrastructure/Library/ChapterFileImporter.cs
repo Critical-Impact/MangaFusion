@@ -16,6 +16,8 @@ public enum ChapterSourceKind
     Cbz,
     Folder,
     Pdf,
+    Cbr,
+    Epub,
 }
 
 /// <summary>Turns one source file (CBZ, image folder, or PDF) plus a set of chapter specs into a
@@ -25,7 +27,8 @@ public enum ChapterSourceKind
 /// <see cref="LocalImportService"/> and the MangaUpdates-assisted import wizard.</summary>
 public sealed class ChapterFileImporter(
     AppDbContext db, LibraryPaths paths, ChapterWriterSelector writers,
-    ArtifactFileInspector artifactInspector, PdfPageExtractor pdfExtractor)
+    ArtifactFileInspector artifactInspector, PdfPageExtractor pdfExtractor,
+    CbrPageExtractor cbrExtractor, EpubPageExtractor epubExtractor)
 {
     /// <summary>Imports one source file as one or more chapters of <paramref name="series"/>, carving
     /// it per <paramref name="chapters"/>. Returns the number of chapters added. The caller is
@@ -185,6 +188,8 @@ public sealed class ChapterFileImporter(
         ChapterSourceKind.Cbz => artifactInspector.CountCbzPages(sourceAbsolutePath),
         ChapterSourceKind.Folder => artifactInspector.CountFolderPages(sourceAbsolutePath),
         ChapterSourceKind.Pdf => pdfExtractor.CountPages(sourceAbsolutePath),
+        ChapterSourceKind.Cbr => cbrExtractor.CountPages(sourceAbsolutePath),
+        ChapterSourceKind.Epub => epubExtractor.CountPages(sourceAbsolutePath),
         _ => throw new ArgumentOutOfRangeException(nameof(sourceKind)),
     };
 
@@ -205,6 +210,12 @@ public sealed class ChapterFileImporter(
 
             case ChapterSourceKind.Cbz:
                 return await ExtractCbzPagesAsync(sourceAbsolutePath, tempDir, ct);
+
+            case ChapterSourceKind.Cbr:
+                return await cbrExtractor.ExtractPagesAsync(sourceAbsolutePath, tempDir, ct);
+
+            case ChapterSourceKind.Epub:
+                return await epubExtractor.ExtractPagesAsync(sourceAbsolutePath, tempDir, ct);
 
             default:
                 throw new ArgumentOutOfRangeException(nameof(sourceKind));

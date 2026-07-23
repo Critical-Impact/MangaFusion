@@ -39,6 +39,8 @@ public class InfrastructureModule : Module
         builder.RegisterType<LocalPaths>().AsSelf().SingleInstance();
         builder.RegisterType<ArtifactFileInspector>().AsSelf().SingleInstance();
         builder.RegisterType<PdfPageExtractor>().AsSelf().SingleInstance();
+        builder.RegisterType<CbrPageExtractor>().AsSelf().SingleInstance();
+        builder.RegisterType<EpubPageExtractor>().AsSelf().SingleInstance();
         builder.RegisterType<AuthorResolver>().AsSelf().InstancePerLifetimeScope();
         builder.RegisterType<TagResolver>().AsSelf().InstancePerLifetimeScope();
         builder.RegisterType<SeriesMetadataApplier>().AsSelf().InstancePerLifetimeScope();

@@ -7,14 +7,15 @@ using Microsoft.Extensions.Configuration;
 
 namespace MangaFusion.Infrastructure.Library;
 
-/// <summary>Creates manually-curated series and imports local CBZ/folder/PDF files as their chapters.
-/// Each source file is rasterized/re-encoded through <see cref="ChapterFileImporter"/> — the same
-/// <see cref="MangaFusion.Application.Writing.IChapterWriter"/>/ComicInfo.xml pipeline downloaded
+/// <summary>Creates manually-curated series and imports local CBZ/CBR/folder/PDF/EPUB files as their
+/// chapters. Each source file is rasterized/re-encoded through <see cref="ChapterFileImporter"/> — the
+/// same <see cref="MangaFusion.Application.Writing.IChapterWriter"/>/ComicInfo.xml pipeline downloaded
 /// chapters use — so manually-imported output lands in the same on-disk format as the rest of the
 /// library, and the M4 reader serves it like any downloaded chapter.</summary>
 public sealed class LocalImportService(
     AppDbContext db, LibraryPaths paths, LocalPaths localPaths,
-    ArtifactFileInspector artifactInspector, PdfPageExtractor pdfExtractor, ChapterFileImporter chapterImporter,
+    ArtifactFileInspector artifactInspector, PdfPageExtractor pdfExtractor, CbrPageExtractor cbrExtractor,
+    EpubPageExtractor epubExtractor, ChapterFileImporter chapterImporter,
     AuthorResolver authorResolver, TagResolver tagResolver)
     : ILocalLibraryService
 {
@@ -67,13 +68,14 @@ public sealed class LocalImportService(
         foreach (var file in Directory.EnumerateFiles(root))
         {
             var name = Path.GetFileName(file);
-            if (name.EndsWith(".cbz", StringComparison.OrdinalIgnoreCase))
+            var sourceKind = ChapterSourceKindClassifier.FromFileName(name);
+            if (sourceKind is not null)
             {
-                items.Add(new InboxItem(name, "cbz", artifactInspector.CountCbzPages(file), new FileInfo(file).Length));
-            }
-            else if (name.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase))
-            {
-                items.Add(new InboxItem(name, "pdf", pdfExtractor.CountPages(file), new FileInfo(file).Length));
+                var pages = TryCountPages(file, sourceKind.Value);
+                if (pages is not null)
+                {
+                    items.Add(new InboxItem(name, KindLabel(sourceKind.Value), pages.Value, new FileInfo(file).Length));
+                }
             }
             else if (ImageContentType.IsImage(name))
             {
@@ -93,6 +95,38 @@ public sealed class LocalImportService(
         return Task.FromResult<IReadOnlyList<InboxItem>>(
             items.OrderBy(i => i.Name, StringComparer.OrdinalIgnoreCase).ToList());
     }
+
+    /// <summary>Null on failure (e.g. a corrupt archive, or an EPUB that turns out to be reflowable
+    /// text rather than an image-based comic) so one bad inbox file doesn't take down the whole
+    /// listing — it's simply left out, same as any other file type the inbox doesn't recognize.</summary>
+    private int? TryCountPages(string file, ChapterSourceKind kind)
+    {
+        try
+        {
+            return kind switch
+            {
+                ChapterSourceKind.Cbz => artifactInspector.CountCbzPages(file),
+                ChapterSourceKind.Pdf => pdfExtractor.CountPages(file),
+                ChapterSourceKind.Cbr => cbrExtractor.CountPages(file),
+                ChapterSourceKind.Epub => epubExtractor.CountPages(file),
+                _ => throw new ArgumentOutOfRangeException(nameof(kind)),
+            };
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
+    }
+
+    private static string KindLabel(ChapterSourceKind kind) => kind switch
+    {
+        ChapterSourceKind.Cbz => "cbz",
+        ChapterSourceKind.Pdf => "pdf",
+        ChapterSourceKind.Cbr => "cbr",
+        ChapterSourceKind.Epub => "epub",
+        ChapterSourceKind.Folder => "folder",
+        _ => throw new ArgumentOutOfRangeException(nameof(kind)),
+    };
 
     public async Task<int> ImportAsync(Guid seriesId, LocalImportRequest request, CancellationToken ct = default)
     {
@@ -123,14 +157,13 @@ public sealed class LocalImportService(
             throw new InvalidOperationException("File is outside the import inbox.");
         }
 
-        if (File.Exists(full) && full.EndsWith(".cbz", StringComparison.OrdinalIgnoreCase))
+        if (File.Exists(full))
         {
-            return (full, ChapterSourceKind.Cbz);
-        }
-
-        if (File.Exists(full) && full.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase))
-        {
-            return (full, ChapterSourceKind.Pdf);
+            var sourceKind = ChapterSourceKindClassifier.FromFileName(full);
+            if (sourceKind is not null)
+            {
+                return (full, sourceKind.Value);
+            }
         }
 
         if (Directory.Exists(full))
@@ -138,7 +171,8 @@ public sealed class LocalImportService(
             return (full, ChapterSourceKind.Folder);
         }
 
-        throw new InvalidOperationException("Inbox entry not found (expected a .cbz/.pdf file or a folder).");
+        throw new InvalidOperationException(
+            "Inbox entry not found (expected a .cbz/.cbr/.pdf/.epub file or a folder).");
     }
 
     private void CacheCover(Series series, string? coverFileName)
@@ -160,6 +194,7 @@ public sealed class LocalImportService(
         var dest = Path.Combine(dir, "cover" + Path.GetExtension(coverFileName).ToLowerInvariant());
         File.Copy(src, dest, overwrite: true);
         series.CoverPath = paths.RelativeTo(series.Kind, dest);
+        series.CoverUpdatedAt = DateTimeOffset.UtcNow;
     }
 
     private static void EnsureLocal(Series series)

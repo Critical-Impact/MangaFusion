@@ -358,6 +358,8 @@ public sealed class ImportService(
         ChapterSourceKind.Cbz => ImportSourceFormat.Cbz,
         ChapterSourceKind.Folder => ImportSourceFormat.Folder,
         ChapterSourceKind.Pdf => ImportSourceFormat.Pdf,
+        ChapterSourceKind.Cbr => ImportSourceFormat.Cbr,
+        ChapterSourceKind.Epub => ImportSourceFormat.Epub,
         _ => throw new ArgumentOutOfRangeException(nameof(kind)),
     };
 

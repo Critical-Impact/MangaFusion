@@ -68,6 +68,16 @@ public sealed class CollectionCoverComposer(LibraryPaths paths, ILogger<Collecti
     public async Task<string?> StoreCustomAsync(
         MediaKind kind, Guid collectionId, Stream image, CancellationToken ct)
     {
+        var file = await StoreCustomAsync(paths.CollectionDirectory(kind, collectionId), "cover-custom.jpg", image, ct);
+        return file is null ? null : paths.RelativeTo(kind, file);
+    }
+
+    /// <summary>Directory-scoped core behind the collection-specific overload above — shared with
+    /// <see cref="SeriesCoverCache"/> so series cover uploads get the same ImageSharp validation/resize
+    /// without duplicating it. Returns the absolute file path written, or null if it isn't a valid
+    /// image.</summary>
+    public async Task<string?> StoreCustomAsync(string directory, string fileName, Stream image, CancellationToken ct)
+    {
         try
         {
             using var img = await Image.LoadAsync(image, ct);
@@ -76,15 +86,14 @@ public sealed class CollectionCoverComposer(LibraryPaths paths, ILogger<Collecti
                 img.Mutate(o => o.Resize(new ResizeOptions { Size = new Size(1024, 1536), Mode = ResizeMode.Max }));
             }
 
-            var dir = paths.CollectionDirectory(kind, collectionId);
-            Directory.CreateDirectory(dir);
-            var file = Path.Combine(dir, "cover-custom.jpg");
+            Directory.CreateDirectory(directory);
+            var file = Path.Combine(directory, fileName);
             await img.SaveAsync(file, new JpegEncoder { Quality = 85 }, ct);
-            return paths.RelativeTo(kind, file);
+            return file;
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "Rejected custom cover for collection {Collection}", collectionId);
+            logger.LogWarning(ex, "Rejected custom cover upload for {Directory}", directory);
             return null;
         }
     }

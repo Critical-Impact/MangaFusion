@@ -12,6 +12,7 @@
       commitAllCleanMigrationSeries,
       clearRankingConflicts,
       searchSeries,
+      getSeries,
       getLibraryTitles,
       removeMigrationSeries,
       type MigrationBatchSummary,
@@ -53,6 +54,10 @@
   let matchResults = $state<Record<string, Series[]>>({})
   let mergeQuery = $state<Record<string, string>>({})
   let libraryTitles = $state<{ id: string; title: string }[]>([])
+
+  // Full MangaDex series detail (for its site URL), keyed by sourceSeriesId — migration always matches
+  // against MangaDex, so unlike AdminImport there's no per-batch source to look up.
+  let matchedDetail = $state<Record<string, Series>>({})
 
   let timer: ReturnType<typeof setInterval> | undefined
 
@@ -146,6 +151,15 @@
     }
   }
 
+  async function loadMatchedDetail(sourceSeriesId: string) {
+    if (matchedDetail[sourceSeriesId]) return
+    try {
+      matchedDetail[sourceSeriesId] = await getSeries('mangadex', sourceSeriesId)
+    } catch {
+      /* "view match" link is best-effort */
+    }
+  }
+
   function regimeLabel(r: string) {
     return r === 'Live' ? 'Live' : r === 'Purged' ? 'Purged from MangaDex' : r === 'Mixed' ? 'Partially purged' : 'Unmatched'
   }
@@ -203,6 +217,16 @@
   let rankingOnlyCount = $derived(
     batch ? batch.series.filter((s) => s.status !== 'Committed' && s.hasRankingOnlyConflict).length : 0,
   )
+
+  // Eagerly fetch each matched series' MangaDex detail (for its site URL) as soon as the match is
+  // known, so "View match" is ready without the admin having to re-search first.
+  $effect(() => {
+    for (const s of visibleSeries) {
+      if (s.matchedSourceSeriesId) {
+        loadMatchedDetail(s.matchedSourceSeriesId)
+      }
+    }
+  })
   // A background commit is in flight for this batch — block starting another one (or a scan) meanwhile.
   let committing = $derived(batch?.status === 'Committing')
 
@@ -379,6 +403,17 @@
               {#if s.committedLibrarySeriesId}
                 <a class="text-[0.8rem] text-brand-soft no-underline" href={`/library/${s.committedLibrarySeriesId}`} use:link>
                   Open in library ↗
+                </a>
+              {/if}
+
+              {#if s.matchedSourceSeriesId && matchedDetail[s.matchedSourceSeriesId]?.siteUrl}
+                <a
+                  class="text-[0.8rem] text-brand-soft no-underline"
+                  href={matchedDetail[s.matchedSourceSeriesId].siteUrl}
+                  target="_blank"
+                  rel="noreferrer noopener"
+                >
+                  View match on MangaDex ↗
                 </a>
               {/if}
 

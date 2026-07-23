@@ -13,9 +13,16 @@ public sealed class SeriesMetadataApplier(AuthorResolver authors, TagResolver ta
 {
     public async Task ApplyAsync(Series series, SourceSeries source, CancellationToken ct)
     {
-        series.Title = source.Title;
+        if (!series.LockedFields.HasFlag(SeriesLockedFields.Title))
+        {
+            series.Title = source.Title;
+        }
         series.AltTitles = source.AltTitles.ToList();
-        series.Description = source.Description;
+        if (!series.LockedFields.HasFlag(SeriesLockedFields.Description))
+        {
+            series.Description = source.Description;
+        }
+        series.SiteUrl = source.SiteUrl;
         series.Authors = source.AuthorRefs.Count > 0
             ? await authors.ResolveSourceAuthorsAsync(source.SourceId, source.AuthorRefs, ct)
             : await authors.ResolveOrCreateByNameAsync(source.Authors, ct);
@@ -28,7 +35,10 @@ public sealed class SeriesMetadataApplier(AuthorResolver authors, TagResolver ta
             : await tags.ResolveOrCreateByNameAsync(series.Kind, source.Tags, ct);
         series.ContentRating = MapRating(source.ContentRating);
         series.Status = MapStatus(source.Status);
-        series.Year = source.Year;
+        if (!series.LockedFields.HasFlag(SeriesLockedFields.Year))
+        {
+            series.Year = source.Year;
+        }
         series.OriginalLanguage = source.OriginalLanguage;
     }
 

@@ -50,7 +50,8 @@ public class MergeTargetKindTests : IDisposable
             [new CbzChapterWriter(TestPageEncoding.Resolver), new FolderChapterWriter(TestPageEncoding.Resolver)],
             _config);
         var chapterImporter = new ChapterFileImporter(
-            db, _paths, writers, new ArtifactFileInspector(), new PdfPageExtractor(_config));
+            db, _paths, writers, new ArtifactFileInspector(), new PdfPageExtractor(_config),
+            new CbrPageExtractor(), new EpubPageExtractor());
 
         return new ImportCommitter(
             db, null!, _importPaths, chapterImporter, new NullNotifier(), NullLogger<ImportCommitter>.Instance);

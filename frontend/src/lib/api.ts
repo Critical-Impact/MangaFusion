@@ -359,6 +359,7 @@ export interface LibrarySeriesDetail {
   sourceId: string | null
   sourceName: string | null
   sourceSeriesId: string | null
+  siteUrl: string | null
   followed: boolean
   followAutoDownload: boolean
   followLanguages: string[]
@@ -368,6 +369,12 @@ export interface LibrarySeriesDetail {
    *  first, chapter number second within it — for manually-imported series mixing whole-volume
    *  compilations with individually-numbered extras tagged to a specific volume). */
   sortMode: string
+  /** True once an admin has manually edited that field — it's excluded from future metadata
+   *  refreshes/monitor scans until unlocked. */
+  titleLocked: boolean
+  yearLocked: boolean
+  descriptionLocked: boolean
+  coverLocked: boolean
 }
 
 /** Route to the author page for a credit. Falls back to a name-based "local" route when the source
@@ -560,6 +567,32 @@ export const updateChapter = (
   chapterId: string,
   body: { number: string | null; volume: string | null; title: string | null },
 ) => send<void>(`/api/library/chapters/${chapterId}`, 'PATCH', body)
+
+/** Manually sets a series' title/year/description, locking all three against being overwritten by a
+ *  future metadata refresh or monitor scan until {@link unlockSeriesMetadata} is called. */
+export const updateSeriesMetadata = (
+  seriesId: string,
+  body: { title: string; year: number | null; description: string | null },
+) => send<void>(`/api/library/series/${seriesId}`, 'PATCH', body)
+
+/** Clears the title/year/description lock — the next metadata refresh/monitor scan overwrites them
+ *  from the source again. */
+export const unlockSeriesMetadata = (seriesId: string) =>
+  send<void>(`/api/library/series/${seriesId}/metadata-lock`, 'DELETE')
+
+/** Uploads a custom series cover, locking it against being overwritten by a future metadata refresh.
+ *  Multipart, so it bypasses `send()`/jsonHeaders — the browser sets the multipart boundary itself,
+ *  which it can't do if we force a Content-Type (mirrors uploadCollectionCover). */
+export async function uploadSeriesCover(seriesId: string, file: File): Promise<void> {
+  const form = new FormData()
+  form.append('file', file)
+  const res = await fetch(`/api/library/series/${seriesId}/cover`, { method: 'POST', credentials: 'include', body: form })
+  if (!res.ok) throw new Error(await extractError(res))
+}
+
+/** Clears the cover lock — the next metadata refresh re-downloads the source's cover again. */
+export const unlockSeriesCover = (seriesId: string) =>
+  send<void>(`/api/library/series/${seriesId}/cover-lock`, 'DELETE')
 
 // --- Reader -----------------------------------------------------------------------------------
 

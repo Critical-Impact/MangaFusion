@@ -7,11 +7,12 @@ namespace MangaFusion.Infrastructure.Library;
 /// add-to-library (<see cref="LibraryService"/>) and the migration tool
 /// (<see cref="MigrationCommitter"/>) — best-effort: failures are logged, never thrown.</summary>
 public sealed class SeriesCoverCache(
-    IHttpClientFactory httpFactory, LibraryPaths paths, ILogger<SeriesCoverCache> logger)
+    IHttpClientFactory httpFactory, LibraryPaths paths, CollectionCoverComposer coverComposer,
+    ILogger<SeriesCoverCache> logger)
 {
     public async Task TryCacheAsync(Series series, string? coverUrl, CancellationToken ct)
     {
-        if (string.IsNullOrEmpty(coverUrl))
+        if (string.IsNullOrEmpty(coverUrl) || series.LockedFields.HasFlag(SeriesLockedFields.Cover))
         {
             return;
         }
@@ -34,10 +35,28 @@ public sealed class SeriesCoverCache(
             }
 
             series.CoverPath = paths.RelativeTo(series.Kind, file);
+            series.CoverUpdatedAt = DateTimeOffset.UtcNow;
         }
         catch (Exception ex)
         {
             logger.LogWarning(ex, "Failed to cache cover for {Series}", series.Title);
         }
+    }
+
+    /// <summary>Validates + stores a user-uploaded cover over the series' existing <c>cover.jpg</c> —
+    /// unlike <see cref="TryCacheAsync"/>, the caller (an admin-only endpoint) is responsible for
+    /// rejecting a bad image, so this returns whether the upload was actually applied.</summary>
+    public async Task<bool> SetCustomCoverAsync(Series series, Stream image, CancellationToken ct)
+    {
+        var directory = paths.SeriesDirectory(series.Kind, series.Title);
+        var file = await coverComposer.StoreCustomAsync(directory, "cover.jpg", image, ct);
+        if (file is null)
+        {
+            return false;
+        }
+
+        series.CoverPath = paths.RelativeTo(series.Kind, file);
+        series.CoverUpdatedAt = DateTimeOffset.UtcNow;
+        return true;
     }
 }

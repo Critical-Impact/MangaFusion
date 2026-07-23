@@ -40,6 +40,11 @@ public static class LibraryEndpoints
         group.MapPut("/series/{id:guid}/groups", SetGroups).RequireAuthorization("Admin");
         group.MapPut("/series/{id:guid}/policy", SetPolicy).RequireAuthorization("Admin");
         group.MapPut("/series/{id:guid}/sort-mode", SetSortMode).RequireAuthorization("Admin");
+
+        group.MapPatch("/series/{id:guid}", UpdateSeriesMetadata).RequireAuthorization("Admin");
+        group.MapDelete("/series/{id:guid}/metadata-lock", UnlockMetadata).RequireAuthorization("Admin");
+        group.MapPost("/series/{id:guid}/cover", UploadCover).RequireAuthorization("Admin").DisableAntiforgery();
+        group.MapDelete("/series/{id:guid}/cover-lock", UnlockCover).RequireAuthorization("Admin");
     }
 
     private static async Task<IResult> SetSortMode(
@@ -203,8 +208,8 @@ public static class LibraryEndpoints
 
         var dtos = result.Items
             .Select(s => new LibrarySeriesDto(
-                s.Id, s.Title, CoverUrl(s.Id, s.CoverPath), followed.Contains(s.Id), s.Tags, s.Year, s.AddedAt,
-                s.ChapterCount, s.Sources))
+                s.Id, s.Title, CoverUrl(s.Id, s.CoverPath, s.CoverUpdatedAt), followed.Contains(s.Id), s.Tags,
+                s.Year, s.AddedAt, s.ChapterCount, s.Sources))
             .ToList();
 
         return Results.Ok(new PagedDto<LibrarySeriesDto>(dtos, result.Total, query.Limit, query.Offset));
@@ -255,6 +260,78 @@ public static class LibraryEndpoints
         try
         {
             await library.UpdateChapterAsync(id, request.Number, request.Volume, request.Title, ct);
+            return Results.NoContent();
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(new { error = ex.Message });
+        }
+    }
+
+    private static async Task<IResult> UpdateSeriesMetadata(
+        Guid id, UpdateSeriesMetadataRequest request, ILibraryService library, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(request.Title))
+        {
+            return Results.BadRequest(new { error = "Title is required." });
+        }
+
+        try
+        {
+            await library.UpdateSeriesMetadataAsync(id, request.Title, request.Year, request.Description, ct);
+            return Results.NoContent();
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(new { error = ex.Message });
+        }
+    }
+
+    private static async Task<IResult> UnlockMetadata(Guid id, ILibraryService library, CancellationToken ct)
+    {
+        try
+        {
+            await library.UnlockMetadataAsync(id, ct);
+            return Results.NoContent();
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(new { error = ex.Message });
+        }
+    }
+
+    private static async Task<IResult> UploadCover(
+        Guid id, ILibraryService library, HttpContext http, CancellationToken ct)
+    {
+        if (!http.Request.HasFormContentType)
+        {
+            return Results.BadRequest(new { error = "Expected a multipart form upload." });
+        }
+
+        var form = await http.Request.ReadFormAsync(ct);
+        var file = form.Files.GetFile("file") ?? form.Files.FirstOrDefault();
+        if (file is null || file.Length == 0)
+        {
+            return Results.BadRequest(new { error = "No image supplied." });
+        }
+
+        try
+        {
+            await using var stream = file.OpenReadStream();
+            var ok = await library.SetCustomCoverAsync(id, stream, ct);
+            return ok ? Results.NoContent() : Results.BadRequest(new { error = "Series not found or the image was invalid." });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(new { error = ex.Message });
+        }
+    }
+
+    private static async Task<IResult> UnlockCover(Guid id, ILibraryService library, CancellationToken ct)
+    {
+        try
+        {
+            await library.UnlockCoverAsync(id, ct);
             return Results.NoContent();
         }
         catch (InvalidOperationException ex)
@@ -330,8 +407,14 @@ public static class LibraryEndpoints
             return;
         }
 
+        // The `v=` query param (see CoverUrl) changes whenever the file does, so a cache hit on that
+        // exact URL is always the right bytes — safe to cache aggressively. A few call sites (recent
+        // downloads/updates, reader "up next", collection member thumbnails) still request the bare
+        // unversioned URL, so those get a short cache instead of a stale-forever one.
         http.Response.ContentType = "image/jpeg";
-        http.Response.Headers.CacheControl = "public, max-age=86400";
+        http.Response.Headers.CacheControl = http.Request.Query.ContainsKey("v")
+            ? "public, max-age=31536000, immutable"
+            : "public, max-age=300";
         await http.Response.SendFileAsync(file, ct);
     }
 
@@ -352,8 +435,15 @@ public static class LibraryEndpoints
         return Results.NoContent();
     }
 
-    private static string? CoverUrl(Guid id, string? coverPath) =>
-        coverPath is null ? null : $"/api/library/series/{id}/cover";
+    // The cover file is overwritten in place at a stable path, so the URL needs its own cache-busting
+    // version — otherwise browsers keep serving a stale cached image after a cover change (until a
+    // hard refresh bypasses the disk cache).
+    private static string? CoverUrl(Guid id, string? coverPath, DateTimeOffset? coverUpdatedAt) =>
+        coverPath is null
+            ? null
+            : coverUpdatedAt is { } updatedAt
+                ? $"/api/library/series/{id}/cover?v={updatedAt.UtcTicks}"
+                : $"/api/library/series/{id}/cover";
 
     private static LibrarySeriesDetailDto ToDetail(
         Series series, IReadOnlyDictionary<Guid, ReadingProgress> progress, Follow? follow, bool reading,
@@ -376,7 +466,7 @@ public static class LibraryEndpoints
             series.Title,
             series.AltTitles,
             series.Description,
-            CoverUrl(series.Id, series.CoverPath),
+            CoverUrl(series.Id, series.CoverPath, series.CoverUpdatedAt),
             series.Authors.Select(a => new AuthorRefDto(a.SourceId, a.SourceAuthorId, a.Name)).ToList(),
             series.Tags.Select(t => new TagInfo(t.Id, t.Name, t.Group, t.SourceId, t.SourceTagId)).ToList(),
             series.ContentRating.ToString(),
@@ -390,12 +480,17 @@ public static class LibraryEndpoints
             link?.SourceId,
             sourceName,
             link?.SourceSeriesId,
+            series.SiteUrl,
             follow is not null,
             follow?.AutoDownload ?? false,
             follow?.Languages ?? [],
             reading,
             chapters,
-            series.SortMode.ToString());
+            series.SortMode.ToString(),
+            series.LockedFields.HasFlag(SeriesLockedFields.Title),
+            series.LockedFields.HasFlag(SeriesLockedFields.Year),
+            series.LockedFields.HasFlag(SeriesLockedFields.Description),
+            series.LockedFields.HasFlag(SeriesLockedFields.Cover));
     }
 
     /// <summary>Orders a series' chapters for display. <see cref="ChapterSortMode.Absolute"/> (the

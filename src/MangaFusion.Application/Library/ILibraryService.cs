@@ -136,4 +136,23 @@ public interface ILibraryService
     /// key accordingly. A no-op if the series is already in that mode. Throws (without changing
     /// anything) if the switch would merge two existing chapters onto the same identity key.</summary>
     Task SetChapterSortModeAsync(Guid seriesId, ChapterSortMode mode, CancellationToken ct = default);
+
+    /// <summary>Manually sets a series' title/year/description and locks all three against being
+    /// overwritten by a future metadata refresh or monitor scan, until <see cref="UnlockMetadataAsync"/>
+    /// is called.</summary>
+    Task UpdateSeriesMetadataAsync(
+        Guid seriesId, string title, int? year, string? description, CancellationToken ct = default);
+
+    /// <summary>Clears the title/year/description lock — the next metadata refresh/monitor scan will
+    /// overwrite them from the source again.</summary>
+    Task UnlockMetadataAsync(Guid seriesId, CancellationToken ct = default);
+
+    /// <summary>Validates and stores a user-uploaded cover image, locking it against being overwritten
+    /// by a future metadata refresh. Returns false if the series doesn't exist or the image is
+    /// invalid.</summary>
+    Task<bool> SetCustomCoverAsync(Guid seriesId, Stream image, CancellationToken ct = default);
+
+    /// <summary>Clears the cover lock — the next metadata refresh will re-download the source's cover
+    /// again.</summary>
+    Task UnlockCoverAsync(Guid seriesId, CancellationToken ct = default);
 }

@@ -43,9 +43,11 @@ public class LibraryServiceUpdateChapterTests : IDisposable
     {
         var artifactInspector = new ArtifactFileInspector();
         var pdfExtractor = new PdfPageExtractor(_config);
+        var cbrExtractor = new CbrPageExtractor();
+        var epubExtractor = new EpubPageExtractor();
         var writers = new ChapterWriterSelector([new CbzChapterWriter(TestPageEncoding.Resolver), new FolderChapterWriter(TestPageEncoding.Resolver)], _config);
-        var chapterImporter = new ChapterFileImporter(db, _paths, writers, artifactInspector, pdfExtractor);
-        return new(db, _paths, _localPaths, artifactInspector, pdfExtractor, chapterImporter, new AuthorResolver(db), new TagResolver(db));
+        var chapterImporter = new ChapterFileImporter(db, _paths, writers, artifactInspector, pdfExtractor, cbrExtractor, epubExtractor);
+        return new(db, _paths, _localPaths, artifactInspector, pdfExtractor, cbrExtractor, epubExtractor, chapterImporter, new AuthorResolver(db), new TagResolver(db));
     }
 
     private LibraryService NewLibraryService(AppDbContext db)
@@ -55,7 +57,10 @@ public class LibraryServiceUpdateChapterTests : IDisposable
         return new LibraryService(
             db, registry: null!, new ChapterImporter(db),
             new SeriesMetadataApplier(authors, tagResolver),
-            new SeriesCoverCache(httpFactory: null!, _paths, NullLogger<SeriesCoverCache>.Instance),
+            new SeriesCoverCache(
+                httpFactory: null!, _paths,
+                new CollectionCoverComposer(_paths, NullLogger<CollectionCoverComposer>.Instance),
+                NullLogger<SeriesCoverCache>.Instance),
             tagResolver, _paths);
     }
 

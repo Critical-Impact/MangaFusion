@@ -12,11 +12,12 @@
     setChapterSortMode,
     scanSeries,
     refreshSeriesMetadata,
+    uploadSeriesCover,
+    unlockSeriesCover,
     deleteSeries,
     deleteChapter,
     addReading,
     dismissReading,
-    sourceSeriesUrl,
     authorHref,
     genreSourceHref,
     getSources,
@@ -30,10 +31,11 @@
   import { notify } from '../lib/notify'
   import { languagesState, ensureLanguagesLoaded, languageName } from '../lib/languages.svelte'
   import { isComic } from '../lib/mode.svelte'
-  import { t } from '../lib/terms.svelte'
+  import { t, facetGroups } from '../lib/terms.svelte'
   import Cover from '../lib/Cover.svelte'
   import AddToCollection from '../lib/AddToCollection.svelte'
   import EditChapterDialog from '../lib/EditChapterDialog.svelte'
+  import EditSeriesDialog from '../lib/EditSeriesDialog.svelte'
   import MultiSelectDropdown from '../lib/MultiSelectDropdown.svelte'
   import { Alert, AlertDescription } from '../lib/components/ui/alert/index.js'
   import { Button } from '../lib/components/ui/button/index.js'
@@ -95,6 +97,8 @@
   let scanning = $state(false)
   let queuingMissing = $state(false)
   let groupFilter = $state<string | null>(null)
+  // Admin-only: reveals the editing surfaces (metadata/cover/groups/policy/sort-mode/per-chapter).
+  let editMode = $state(false)
 
   // A manually-imported series: no remote source to download from or scan.
   const isLocal = $derived(detail?.sourceId === 'local')
@@ -211,8 +215,41 @@
   }
 
   function libraryHref(tag: TagInfo): string {
-    return `/library?${tag.group === 'theme' ? 'theme' : 'genre'}=${tag.id}`
+    return `/library?${tag.group.toLowerCase()}=${tag.id}`
   }
+
+  // Splits the flat tag list into labeled sections by tag.group — the known browse/library facet
+  // groups first (Genre/Theme for manga, Publisher/Character/Concept for comics), in that order, then
+  // any other group the source sends (e.g. MangaDex's "format"/"content") appended under its own
+  // title-cased label rather than getting silently dropped.
+  //
+  // Grouped case-insensitively: a tag's group is meant to be a stable identifier, not display text, so
+  // two casings of the same group (e.g. a badly-cased source, or an older row from before a source
+  // normalized its casing) are the same section rather than two — which also matters mechanically,
+  // since two sections that stringify to the same label would otherwise collide as duplicate #each keys.
+  let tagSections = $derived.by(() => {
+    if (!detail) return []
+    const byGroup = new Map<string, TagInfo[]>()
+    for (const tag of detail.tags) {
+      const key = tag.group.toLowerCase()
+      const list = byGroup.get(key)
+      if (list) list.push(tag)
+      else byGroup.set(key, [tag])
+    }
+    const sections: { label: string; tags: TagInfo[] }[] = []
+    for (const { group, label } of facetGroups()) {
+      const key = group.toLowerCase()
+      const tags = byGroup.get(key)
+      if (tags?.length) {
+        sections.push({ label, tags })
+        byGroup.delete(key)
+      }
+    }
+    for (const [group, tags] of byGroup) {
+      sections.push({ label: group.charAt(0).toUpperCase() + group.slice(1), tags })
+    }
+    return sections
+  })
 
   onMount(load)
 
@@ -370,6 +407,35 @@
     }
   }
 
+  let uploadingCover = $state(false)
+  let unlockingCover = $state(false)
+  let coverFileInput = $state<HTMLInputElement | null>(null)
+  async function onCoverFileChosen(e: Event) {
+    const file = (e.target as HTMLInputElement).files?.[0]
+    if (!file) return
+    uploadingCover = true
+    try {
+      await uploadSeriesCover(params.id, file)
+      await refresh()
+    } catch (err) {
+      notify.error(err instanceof Error ? err.message : 'Failed to upload cover.')
+    } finally {
+      uploadingCover = false
+      if (coverFileInput) coverFileInput.value = ''
+    }
+  }
+  async function unlockCoverNow() {
+    unlockingCover = true
+    try {
+      await unlockSeriesCover(params.id)
+      await refresh()
+    } catch (err) {
+      notify.error(err instanceof Error ? err.message : 'Failed to unlock cover.')
+    } finally {
+      unlockingCover = false
+    }
+  }
+
   let deletingSeries = $state(false)
   async function deleteSeriesNow() {
     deletingSeries = true
@@ -444,18 +510,53 @@
     <div class="mb-5 flex gap-6 max-[640px]:flex-col">
       <div class="flex-[0_0_170px]" style="--cover-w:170px">
         <Cover src={detail.coverUrl} alt={detail.title} />
+        {#if isAdmin() && editMode}
+          <input
+            bind:this={coverFileInput}
+            type="file"
+            accept="image/*"
+            class="hidden"
+            onchange={onCoverFileChosen}
+          />
+          <div class="mt-1.5 flex items-center gap-1.5">
+            <Button
+              variant="secondary"
+              size="mini"
+              disabled={uploadingCover}
+              onclick={() => coverFileInput?.click()}
+            >
+              {#if uploadingCover}<Spinner />{/if}
+              {uploadingCover ? 'Uploading…' : 'Change cover'}
+            </Button>
+            {#if detail.coverLocked}
+              <Button variant="secondary" size="mini" disabled={unlockingCover} onclick={unlockCoverNow}>
+                {#if unlockingCover}<Spinner />{/if}
+                Unlock
+              </Button>
+            {/if}
+          </div>
+        {/if}
       </div>
       <div class="min-w-0 flex-1">
-        <h1 class="mb-1 text-2xl">{detail.title}</h1>
+        <div class="mb-1 flex items-center gap-2">
+          <h1 class="text-2xl">{detail.title}</h1>
+          {#if isAdmin() && editMode}
+            <EditSeriesDialog series={detail} onSaved={refresh} />
+          {/if}
+        </div>
         <p class="muted">
-          {detail.status}{detail.year ? ` · ${detail.year}` : ''} · {detail.contentRating}{detail.sourceName ? ` · ${detail.sourceName}` : ''}
-          {#if sourceSeriesUrl(detail.sourceId, detail.sourceSeriesId)}
-            · <a
-              class="text-brand-soft no-underline hover:underline"
-              href={sourceSeriesUrl(detail.sourceId, detail.sourceSeriesId)}
-              target="_blank"
-              rel="noreferrer noopener"
-            >MangaDex ↗</a>
+          {detail.status}{detail.year ? ` · ${detail.year}` : ''} · {detail.contentRating}
+          {#if detail.sourceName}
+            · {#if detail.siteUrl}
+              <a
+                class="text-brand-soft no-underline hover:underline"
+                href={detail.siteUrl}
+                target="_blank"
+                rel="noreferrer noopener"
+              >{detail.sourceName} ↗</a>
+            {:else}
+              {detail.sourceName}
+            {/if}
           {/if}
           {#if isLocal}
             · <Badge variant="outline" class="text-info border-info/40">Local</Badge>
@@ -524,6 +625,14 @@
             {/if}
           {/if}
           {#if isAdmin()}
+            <Button
+              variant={editMode ? 'secondary' : 'outline'}
+              size="mini"
+              class="ml-auto"
+              onclick={() => (editMode = !editMode)}
+            >
+              {editMode ? '✓ Editing — done' : '✎ Edit'}
+            </Button>
             <AlertDialog>
               <AlertDialogTrigger>
                 {#snippet child({ props })}
@@ -531,7 +640,7 @@
                     {...props}
                     variant="secondary"
                     size="mini"
-                    class="ml-auto border-danger-border text-destructive hover:border-destructive"
+                    class="border-danger-border text-destructive hover:border-destructive"
                     disabled={deletingSeries}
                   >
                     {#if deletingSeries}<Spinner />{/if}
@@ -567,21 +676,26 @@
         {#if detail.description}
           <p class="my-3 max-h-28 overflow-y-auto text-sm text-text-dim [white-space:pre-line]">{detail.description}</p>
         {/if}
-        {#if detail.tags.length}
-          <div class="mb-3 flex flex-wrap gap-1.5">
-            {#each detail.tags as tag (tag.id)}
-              {@const sourceHref = genreSourceHref(tag)}
-              <DropdownMenu>
-                <DropdownMenuTrigger
-                  class={cn(badgeVariants({ variant: 'secondary' }), 'cursor-pointer hover:text-brand-soft')}
-                >{tag.name}</DropdownMenuTrigger>
-                <DropdownMenuContent align="start">
-                  <DropdownMenuItem onSelect={() => push(libraryHref(tag))}>View in Library</DropdownMenuItem>
-                  {#if sourceHref}
-                    <DropdownMenuItem onSelect={() => push(sourceHref)}>View on MangaDex</DropdownMenuItem>
-                  {/if}
-                </DropdownMenuContent>
-              </DropdownMenu>
+        {#if tagSections.length}
+          <div class="mb-3 flex flex-col gap-1">
+            {#each tagSections as section (section.label)}
+              <div class="flex flex-wrap items-center gap-1.5">
+                <span class="text-xs text-text-mute">{section.label}:</span>
+                {#each section.tags as tag (tag.id)}
+                  {@const sourceHref = genreSourceHref(tag)}
+                  <DropdownMenu>
+                    <DropdownMenuTrigger
+                      class={cn(badgeVariants({ variant: 'secondary' }), 'cursor-pointer hover:text-brand-soft')}
+                    >{tag.name}</DropdownMenuTrigger>
+                    <DropdownMenuContent align="start">
+                      <DropdownMenuItem onSelect={() => push(libraryHref(tag))}>View in Library</DropdownMenuItem>
+                      {#if sourceHref}
+                        <DropdownMenuItem onSelect={() => push(sourceHref)}>View on MangaDex</DropdownMenuItem>
+                      {/if}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                {/each}
+              </div>
             {/each}
           </div>
         {/if}
@@ -590,7 +704,7 @@
 
     <!-- Scanlation groups are a manga concept: a comic issue has exactly one canonical release, so
          there is nothing to rank. -->
-    {#if isAdmin() && !isComic()}
+    {#if isAdmin() && editMode && !isComic()}
       <Card class="mt-2 mb-5" size="sm">
         <CardContent>
           <Collapsible>
@@ -644,7 +758,7 @@
     <!-- Only matters for manually-imported content (whole-volume compilations mixed with
          individually-numbered extras) — gated on the same per-chapter canEdit signal the chapter-edit
          dialog uses, not isLocal/sourceId (misleading for e.g. a ComicVine-matched comic). -->
-    {#if isAdmin() && hasManualChapters}
+    {#if isAdmin() && editMode && hasManualChapters}
       <Card class="mt-2 mb-5" size="sm">
         <CardContent>
           <div class="flex flex-wrap items-center gap-3">
@@ -831,10 +945,10 @@
                     </Tooltip>
                   {/if}
                 {/if}
-                {#if isAdmin() && c.canEdit}
+                {#if isAdmin() && editMode && c.canEdit}
                   <EditChapterDialog chapter={c} allChapters={detail.chapters} onSaved={refresh} />
                 {/if}
-                {#if isAdmin()}
+                {#if isAdmin() && editMode}
                   <AlertDialog>
                     <AlertDialogTrigger>
                       {#snippet child({ props })}

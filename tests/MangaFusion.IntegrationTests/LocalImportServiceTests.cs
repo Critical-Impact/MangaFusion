@@ -47,9 +47,11 @@ public class LocalImportServiceTests : IDisposable
     {
         var artifactInspector = new ArtifactFileInspector();
         var pdfExtractor = new PdfPageExtractor(_config);
+        var cbrExtractor = new CbrPageExtractor();
+        var epubExtractor = new EpubPageExtractor();
         var writers = new ChapterWriterSelector([new CbzChapterWriter(TestPageEncoding.Resolver), new FolderChapterWriter(TestPageEncoding.Resolver)], _config);
-        var chapterImporter = new ChapterFileImporter(db, _paths, writers, artifactInspector, pdfExtractor);
-        return new(db, _paths, _localPaths, artifactInspector, pdfExtractor, chapterImporter, new AuthorResolver(db), new TagResolver(db));
+        var chapterImporter = new ChapterFileImporter(db, _paths, writers, artifactInspector, pdfExtractor, cbrExtractor, epubExtractor);
+        return new(db, _paths, _localPaths, artifactInspector, pdfExtractor, cbrExtractor, epubExtractor, chapterImporter, new AuthorResolver(db), new TagResolver(db));
     }
 
     private ReaderService NewReader(AppDbContext db) =>

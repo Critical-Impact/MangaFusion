@@ -336,6 +336,8 @@ public sealed class ImportCommitter(
         ImportSourceFormat.Cbz => ChapterSourceKind.Cbz,
         ImportSourceFormat.Folder => ChapterSourceKind.Folder,
         ImportSourceFormat.Pdf => ChapterSourceKind.Pdf,
+        ImportSourceFormat.Cbr => ChapterSourceKind.Cbr,
+        ImportSourceFormat.Epub => ChapterSourceKind.Epub,
         _ => throw new ArgumentOutOfRangeException(nameof(format)),
     };
 }

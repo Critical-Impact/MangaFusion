@@ -16,7 +16,8 @@ public class ImportScannerRecursionTests : IDisposable
         var config = new ConfigurationBuilder().Build();
         var writers = new ChapterWriterSelector([new CbzChapterWriter(TestPageEncoding.Resolver), new FolderChapterWriter(TestPageEncoding.Resolver)], config);
         var chapterImporter = new ChapterFileImporter(
-            null!, null!, writers, new ArtifactFileInspector(), new PdfPageExtractor(config));
+            null!, null!, writers, new ArtifactFileInspector(), new PdfPageExtractor(config),
+            new CbrPageExtractor(), new EpubPageExtractor());
         _scanner = new ImportScanner(chapterImporter);
     }
 

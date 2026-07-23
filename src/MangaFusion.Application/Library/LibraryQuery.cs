@@ -34,6 +34,7 @@ public sealed record LibraryListItem(
     Guid Id,
     string Title,
     string? CoverPath,
+    DateTimeOffset? CoverUpdatedAt,
     IReadOnlyList<string> Tags,
     int? Year,
     DateTimeOffset AddedAt,

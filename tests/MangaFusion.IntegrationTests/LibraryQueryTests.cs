@@ -34,7 +34,10 @@ public class LibraryQueryTests : IDisposable
         return new LibraryService(
             db, registry, new ChapterImporter(db),
             new SeriesMetadataApplier(authors, tagResolver),
-            new SeriesCoverCache(httpFactory: null!, paths, NullLogger<SeriesCoverCache>.Instance),
+            new SeriesCoverCache(
+                httpFactory: null!, paths,
+                new CollectionCoverComposer(paths, NullLogger<CollectionCoverComposer>.Instance),
+                NullLogger<SeriesCoverCache>.Instance),
             tagResolver, paths);
     }
 
