@@ -10,6 +10,7 @@
   import { notify } from '../lib/notify'
   import { languagesState, ensureLanguagesLoaded, languageName } from '../lib/languages.svelte'
   import { homeScope, setHomeAcrossLibraries, brandName } from '../lib/mode.svelte'
+  import { t } from '../lib/terms.svelte'
   import DashboardSettings from '../lib/DashboardSettings.svelte'
 
   ensureLanguagesLoaded()
@@ -211,7 +212,7 @@
       </label>
       <span class="muted text-[0.75rem]">
         Applies to Continue reading, Recently downloaded and Recently updated. By default these follow the
-        library you're in, so {brandName()} only shows you {brandName() === 'ComicFusion' ? 'comics' : 'manga'}.
+        library you're in, so {brandName()} only shows you {t('library').toLowerCase()}.
       </span>
 
       <div class="mt-3 flex flex-col gap-[0.4rem]">

@@ -7,15 +7,16 @@ using Microsoft.Extensions.Configuration;
 
 namespace MangaFusion.Infrastructure.Library;
 
-/// <summary>Creates manually-curated series and imports local CBZ/CBR/folder/PDF/EPUB files as their
-/// chapters. Each source file is rasterized/re-encoded through <see cref="ChapterFileImporter"/> — the
-/// same <see cref="MangaFusion.Application.Writing.IChapterWriter"/>/ComicInfo.xml pipeline downloaded
-/// chapters use — so manually-imported output lands in the same on-disk format as the rest of the
-/// library, and the M4 reader serves it like any downloaded chapter.</summary>
+/// <summary>Creates manually-curated series and imports local files as their chapters. Image files
+/// (CBZ/CBR/folder/PDF/comic-EPUB) go through <see cref="ChapterFileImporter"/> — the same
+/// <see cref="MangaFusion.Application.Writing.IChapterWriter"/>/ComicInfo.xml pipeline downloaded chapters
+/// use. Prose files (EPUB/txt/md, only in a light-novel library) go through the parallel
+/// <see cref="ProseChapterImporter"/> instead, producing an EPUB3 artifact for the text reader. Either
+/// way the M4 reader serves the result like any downloaded chapter.</summary>
 public sealed class LocalImportService(
     AppDbContext db, LibraryPaths paths, LocalPaths localPaths,
     ArtifactFileInspector artifactInspector, PdfPageExtractor pdfExtractor, CbrPageExtractor cbrExtractor,
-    EpubPageExtractor epubExtractor, ChapterFileImporter chapterImporter,
+    EpubPageExtractor epubExtractor, ChapterFileImporter chapterImporter, ProseChapterImporter proseImporter,
     AuthorResolver authorResolver, TagResolver tagResolver)
     : ILocalLibraryService
 {
@@ -26,6 +27,7 @@ public sealed class LocalImportService(
         {
             SourceId = LocalSourceConstants.SourceId,
             SourceSeriesId = Guid.NewGuid().ToString("N"),
+            Kind = metadata.Kind,
             IsMetadataPrimary = true,
         });
         await ApplyMetadataAsync(series, metadata, ct);
@@ -68,13 +70,15 @@ public sealed class LocalImportService(
         foreach (var file in Directory.EnumerateFiles(root))
         {
             var name = Path.GetFileName(file);
-            var sourceKind = ChapterSourceKindClassifier.FromFileName(name);
+            var sourceKind = ClassifyForKind(file, kind);
             if (sourceKind is not null)
             {
                 var pages = TryCountPages(file, sourceKind.Value);
                 if (pages is not null)
                 {
-                    items.Add(new InboxItem(name, KindLabel(sourceKind.Value), pages.Value, new FileInfo(file).Length));
+                    items.Add(new InboxItem(
+                        name, KindLabel(sourceKind.Value), pages.Value, new FileInfo(file).Length,
+                        IsProse(sourceKind.Value)));
                 }
             }
             else if (ImageContentType.IsImage(name))
@@ -109,6 +113,10 @@ public sealed class LocalImportService(
                 ChapterSourceKind.Pdf => pdfExtractor.CountPages(file),
                 ChapterSourceKind.Cbr => cbrExtractor.CountPages(file),
                 ChapterSourceKind.Epub => epubExtractor.CountPages(file),
+                // Page count is meaningless for prose (one file = one chapter); report 0 so the file still
+                // lists (a non-null count) without opening it as pages. TODO: surface a word count instead.
+                ChapterSourceKind.ProseEpub or ChapterSourceKind.ProsePdf
+                    or ChapterSourceKind.ProseText or ChapterSourceKind.ProseMarkdown => 0,
                 _ => throw new ArgumentOutOfRangeException(nameof(kind)),
             };
         }
@@ -125,8 +133,17 @@ public sealed class LocalImportService(
         ChapterSourceKind.Cbr => "cbr",
         ChapterSourceKind.Epub => "epub",
         ChapterSourceKind.Folder => "folder",
+        ChapterSourceKind.ProseEpub => "epub",
+        ChapterSourceKind.ProsePdf => "pdf",
+        ChapterSourceKind.ProseText => "txt",
+        ChapterSourceKind.ProseMarkdown => "md",
         _ => throw new ArgumentOutOfRangeException(nameof(kind)),
     };
+
+    private static ChapterSourceKind? ClassifyForKind(string filePath, MediaKind kind) =>
+        ChapterSourceKindClassifier.ClassifyForKind(filePath, kind);
+
+    private static bool IsProse(ChapterSourceKind kind) => ChapterSourceKindClassifier.IsProse(kind);
 
     public async Task<int> ImportAsync(Guid seriesId, LocalImportRequest request, CancellationToken ct = default)
     {
@@ -144,8 +161,13 @@ public sealed class LocalImportService(
         // pull a comic out of the manga inbox by naming it.
         var (sourcePath, sourceKind) = ResolveInboxEntry(series.Kind, request.FileName);
         var fileBaseName = LibraryPaths.Sanitize(Path.GetFileNameWithoutExtension(sourcePath));
-        return await chapterImporter.ImportAsync(
-            series, sourcePath, sourceKind, fileBaseName, request.Language, request.Chapters, ct);
+
+        // Prose files write an EPUB3 via the parallel importer; everything else stays on the image path.
+        return IsProse(sourceKind)
+            ? await proseImporter.ImportAsync(
+                series, sourcePath, sourceKind, fileBaseName, request.Language, request.Chapters, ct)
+            : await chapterImporter.ImportAsync(
+                series, sourcePath, sourceKind, fileBaseName, request.Language, request.Chapters, ct);
     }
 
     private (string Path, ChapterSourceKind Kind) ResolveInboxEntry(MediaKind kind, string fileName)
@@ -159,7 +181,7 @@ public sealed class LocalImportService(
 
         if (File.Exists(full))
         {
-            var sourceKind = ChapterSourceKindClassifier.FromFileName(full);
+            var sourceKind = ClassifyForKind(full, kind);
             if (sourceKind is not null)
             {
                 return (full, sourceKind.Value);
@@ -172,7 +194,7 @@ public sealed class LocalImportService(
         }
 
         throw new InvalidOperationException(
-            "Inbox entry not found (expected a .cbz/.cbr/.pdf/.epub file or a folder).");
+            "Inbox entry not found (expected a .cbz/.cbr/.pdf/.epub/.txt/.md file or a folder).");
     }
 
     private void CacheCover(Series series, string? coverFileName)

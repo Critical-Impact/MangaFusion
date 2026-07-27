@@ -170,7 +170,8 @@ public sealed class MigrationCommitter(
             .Include(s => s.Authors)
             .Include(s => s.Artists)
             .FirstOrDefaultAsync(
-                s => s.SourceLinks.Any(l => l.SourceId == MigrationMatcher.SourceId && l.SourceSeriesId == sourceSeriesId),
+                s => s.Kind == migrationSeries.Batch.Kind
+                     && s.SourceLinks.Any(l => l.SourceId == MigrationMatcher.SourceId && l.SourceSeriesId == sourceSeriesId),
                 ct);
         if (existing is not null)
         {
@@ -218,6 +219,7 @@ public sealed class MigrationCommitter(
         {
             SourceId = MigrationMatcher.SourceId,
             SourceSeriesId = sourceSeriesId,
+            Kind = series.Kind,
             IsMetadataPrimary = isPrimary,
         });
     }

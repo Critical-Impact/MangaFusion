@@ -5,13 +5,17 @@ namespace MangaFusion.Infrastructure.Library;
 
 /// <summary>Resolves on-disk locations under the configured library roots and sanitizes names.
 ///
-/// Manga and comics live under <b>separate roots</b>, so the two libraries can sit on different volumes
-/// (comics on a NAS, manga on an SSD). The consequence is that <c>Artifact.Path</c> and
-/// <c>Series.CoverPath</c> are relative to <em>their own kind's</em> root — a stored relative path is
+/// Each kind (manga, comics, light novels) lives under a <b>separate root</b>, so the libraries can sit
+/// on different volumes (comics on a NAS, manga on an SSD). The consequence is that <c>Artifact.Path</c>
+/// and <c>Series.CoverPath</c> are relative to <em>their own kind's</em> root — a stored relative path is
 /// meaningless without the kind, which is why every resolve site has to hand one in.
 ///
-/// <c>Library:RootPath</c> remains a base that the two per-kind defaults derive from: one knob for a
-/// simple setup, two for a split one.</summary>
+/// <c>Library:RootPath</c> remains a base that the per-kind defaults derive from: one knob for a simple
+/// setup, several for a split one.
+///
+/// <b>The <c>_roots</c> dictionary below is hand-maintained, not enum-iterated</b> — a new
+/// <see cref="MediaKind"/> must be added here explicitly or <see cref="Root"/> throws a
+/// <see cref="KeyNotFoundException"/> the first time that kind's library is touched.</summary>
 public sealed class LibraryPaths
 {
     private readonly IReadOnlyDictionary<MediaKind, string> _roots;
@@ -35,6 +39,8 @@ public sealed class LibraryPaths
                 config["Library:MangaRootPath"] ?? Path.Combine(baseRoot, MediaKindFolder.For(MediaKind.Manga))),
             [MediaKind.Comic] = Resolve(
                 config["Library:ComicRootPath"] ?? Path.Combine(baseRoot, MediaKindFolder.For(MediaKind.Comic))),
+            [MediaKind.LightNovel] = Resolve(
+                config["Library:LightNovelRootPath"] ?? Path.Combine(baseRoot, MediaKindFolder.For(MediaKind.LightNovel))),
         };
 
         TempRoot = Resolve(config["Library:TempPath"] ?? "data/tmp");

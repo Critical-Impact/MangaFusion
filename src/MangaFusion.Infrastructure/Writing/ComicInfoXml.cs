@@ -52,11 +52,13 @@ internal static class ComicInfoXml
     }
 
     /// <summary>The schema's MangaEnum: "No" | "Yes" | "YesAndRightToLeft" | "Unknown". A comic is always
-    /// "No" — an exported comic that claims to be manga makes Komga/Kavita page it backwards. Only for
-    /// manga does the original language decide between the left-to-right and right-to-left variants.</summary>
+    /// "No" — an exported comic that claims to be manga makes Komga/Kavita page it backwards. A light novel
+    /// is likewise "No" (it's prose, exported as EPUB, never a right-to-left image reader). Only for manga
+    /// does the original language decide between the left-to-right and right-to-left variants.</summary>
     private static string MapManga(MediaKind kind, string? originalLanguage) => kind switch
     {
         MediaKind.Comic => "No",
+        MediaKind.LightNovel => "No",
         _ => MangaLanguage.IsRightToLeft(originalLanguage) ? "YesAndRightToLeft" : "Yes",
     };
 

@@ -77,7 +77,7 @@ public class SeriesSourceLinkConfiguration : IEntityTypeConfiguration<SeriesSour
         builder.HasKey(x => x.Id);
         builder.Property(x => x.SourceId).HasMaxLength(64).IsRequired();
         builder.Property(x => x.SourceSeriesId).IsRequired();
-        builder.HasIndex(x => new { x.SourceId, x.SourceSeriesId }).IsUnique();
+        builder.HasIndex(x => new { x.SourceId, x.SourceSeriesId, x.Kind }).IsUnique();
     }
 }
 

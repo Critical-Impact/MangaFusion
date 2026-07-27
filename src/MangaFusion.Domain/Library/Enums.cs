@@ -1,14 +1,16 @@
 namespace MangaFusion.Domain.Library;
 
 /// <summary>Which flavour of the app a row belongs to. The library is split along this axis: a series
-/// is either manga (MangaDex, scanlation groups, translated languages, right-to-left) or comics
-/// (ComicVine, publishers/characters/arcs, local files only). Kind lives on <see cref="Series"/> and
+/// is manga (MangaDex, scanlation groups, translated languages, right-to-left), comics (ComicVine,
+/// publishers/characters/arcs, local files only), or light novels (MangaUpdates metadata, local prose
+/// files, a real text reader instead of the image-page viewer). Kind lives on <see cref="Series"/> and
 /// everything hanging off a series inherits it by navigation — only rows with no path back to a series
 /// (tags, downloads, notifications, wizard batches) carry their own copy.</summary>
 public enum MediaKind
 {
     Manga = 0,
     Comic = 1,
+    LightNovel = 2,
 }
 
 /// <summary>Content rating (canonical domain copy; source enums are mapped onto this at the boundary).</summary>
@@ -30,11 +32,17 @@ public enum PublicationStatus
     Cancelled,
 }
 
-/// <summary>On-disk format of a downloaded artifact.</summary>
+/// <summary>On-disk format of a downloaded artifact. <see cref="Cbz"/>/<see cref="Folder"/> hold page
+/// images and are read through <c>IArtifactReader</c>; <see cref="Prose"/> is a real EPUB3 of reflowable
+/// text (light novels) served by the parallel <c>IProseArtifactReader</c> pipeline; <see cref="Pdf"/> is
+/// a light-novel PDF stored verbatim and rendered fixed-layout by the client's PDF.js reader (kept as-is
+/// to preserve the cover/illustrations/TOC/layout a conversion would strip).</summary>
 public enum StorageFormat
 {
     Cbz = 0,
     Folder = 1,
+    Prose = 2,
+    Pdf = 3,
 }
 
 public enum ArtifactStatus

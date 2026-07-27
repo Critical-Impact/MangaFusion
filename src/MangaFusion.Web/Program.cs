@@ -473,6 +473,7 @@ app.MapSourceEndpoints();
 app.MapLibraryEndpoints();
 app.MapCollectionEndpoints();
 app.MapReaderEndpoints();
+app.MapProseReaderEndpoints();
 app.MapMonitoringEndpoints();
 app.MapAdminEndpoints();
 app.MapAdminTaskEndpoints();

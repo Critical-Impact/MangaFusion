@@ -12,6 +12,7 @@
     type LocalChapterSpec,
   } from '../../lib/api'
   import { notify } from '../../lib/notify'
+  import { modeState } from '../../lib/mode.svelte'
   import { Button } from '../../lib/components/ui/button/index.js'
   import { Textarea } from '../../lib/components/ui/textarea/index.js'
   import { Input } from '../../lib/components/ui/input/index.js'
@@ -35,16 +36,28 @@
   let cover = $state('')
   let creating = $state(false)
 
-  // Per-file import controls, keyed by inbox file name.
-  let imp = $state<Record<string, { lang: string; count: number; start: string }>>({})
+  // Per-file import controls, keyed by inbox file name. Image imports use count/start (page-split);
+  // prose imports use number/volume/title (one file = one chapter, no page split).
+  let imp = $state<
+    Record<string, { lang: string; count: number; start: string; volume: string; title: string }>
+  >({})
   let busy = $state<Record<string, boolean>>({})
 
   const csv = (s: string) => s.split(',').map((x) => x.trim()).filter(Boolean)
   const ratings = ['Unknown', 'Safe', 'Suggestive', 'Erotica', 'Pornographic']
   const statuses = ['Unknown', 'Ongoing', 'Completed', 'Hiatus', 'Cancelled']
 
+  // A light-novel library can hold BOTH prose and image chapters — the backend detects each file's actual
+  // nature (a text EPUB/PDF vs a scanned one) and reports it per-file as `prose`, which drives the import
+  // controls. So the library kind only decides which formats are offered; whether a given file uses prose
+  // or page-split controls comes from the file itself, not the mode.
+  const isLightNovel = $derived(modeState.kind === 'lightnovel')
   const importable = $derived(
-    inbox.filter((i) => i.kind === 'cbz' || i.kind === 'cbr' || i.kind === 'epub' || i.kind === 'folder'),
+    inbox.filter((i) =>
+      isLightNovel
+        ? ['cbz', 'cbr', 'epub', 'pdf', 'folder', 'txt', 'md'].includes(i.kind)
+        : i.kind === 'cbz' || i.kind === 'cbr' || i.kind === 'epub' || i.kind === 'folder',
+    ),
   )
   const covers = $derived(inbox.filter((i) => i.kind === 'image').map((i) => i.name))
 
@@ -54,7 +67,7 @@
     try {
       ;[series, inbox] = await Promise.all([getLocalSeries(), getInbox()])
       if (!targetId && series.length) targetId = series[0].id
-      for (const f of importable) imp[f.name] ??= { lang: 'en', count: 1, start: '1' }
+      for (const f of importable) imp[f.name] ??= { lang: 'en', count: 1, start: '1', volume: '', title: '' }
     } catch (err) {
       notify.error(msgOf(err))
     }
@@ -105,6 +118,19 @@
     return specs
   }
 
+  // Prose is one file = one chapter: a single spec carrying the hand-entered number/volume/title, no page
+  // split. `start` doubles as the chapter number field in the prose control set.
+  function buildProseSpec(cfg: { start: string; volume: string; title: string }): LocalChapterSpec[] {
+    return [
+      {
+        number: cfg.start.trim() || '1',
+        volume: cfg.volume.trim() || null,
+        title: cfg.title.trim() || null,
+        pageCount: 0,
+      },
+    ]
+  }
+
   async function doImport(file: InboxItem) {
     if (!targetId) {
       notify.error('Pick a target series first.')
@@ -113,7 +139,8 @@
     const cfg = imp[file.name]
     busy[file.name] = true
     try {
-      const { imported } = await importLocalFile(targetId, file.name, cfg.lang.trim(), buildSpecs(file, cfg.count, cfg.start))
+      const specs = file.prose ? buildProseSpec(cfg) : buildSpecs(file, cfg.count, cfg.start)
+      const { imported } = await importLocalFile(targetId, file.name, cfg.lang.trim(), specs)
       notify.success(`Imported ${imported} chapter(s) from ${file.name}.`)
     } catch (err) {
       notify.error(msgOf(err))
@@ -198,22 +225,36 @@
     {/if}
 
     {#if importable.length === 0}
-      <p class="muted">No importable files in the inbox. Drop <code>.cbz</code>/<code>.cbr</code> files, image-based <code>.epub</code> files, or image folders into the configured inbox path.</p>
+      {#if isLightNovel}
+        <p class="muted">No importable files in the inbox. Drop <code>.epub</code>, <code>.pdf</code>, <code>.txt</code>, or <code>.md</code> files (text or scanned) into the configured inbox path.</p>
+      {:else}
+        <p class="muted">No importable files in the inbox. Drop <code>.cbz</code>/<code>.cbr</code> files, image-based <code>.epub</code> files, or image folders into the configured inbox path.</p>
+      {/if}
     {:else}
       <ul class="mt-[0.6rem] list-none overflow-hidden rounded-[var(--r-md)] border border-border p-0">
         {#each importable as f (f.name)}
           <li class="flex flex-wrap items-center justify-between gap-4 border-b border-border-dim px-4 py-[0.6rem] last:border-b-0">
             <span class="flex flex-col text-[0.88rem]">
-              {f.name}<span class="text-[0.72rem] text-text-mute">{f.kind} · {f.pageCount} pages</span>
+              {f.name}<span class="text-[0.72rem] text-text-mute">{f.kind}{f.prose ? ' · whole volume' : ` · ${f.pageCount} pages`}</span>
             </span>
             <span class="flex items-center gap-2">
               <Input class="w-[4.5rem]" bind:value={imp[f.name].lang} title="language" />
-              <label class="flex items-center gap-[0.3rem] text-[0.75rem] text-text-mute">
-                chapters <Input class="w-[4.5rem]" type="number" min="1" bind:value={imp[f.name].count} />
-              </label>
-              <label class="flex items-center gap-[0.3rem] text-[0.75rem] text-text-mute">
-                from # <Input class="w-[4.5rem]" bind:value={imp[f.name].start} />
-              </label>
+              {#if f.prose}
+                <label class="flex items-center gap-[0.3rem] text-[0.75rem] text-text-mute">
+                  # <Input class="w-[4rem]" bind:value={imp[f.name].start} title="chapter number" />
+                </label>
+                <label class="flex items-center gap-[0.3rem] text-[0.75rem] text-text-mute">
+                  vol <Input class="w-[4rem]" bind:value={imp[f.name].volume} title="volume (optional)" />
+                </label>
+                <Input class="w-[9rem]" placeholder="title (optional)" bind:value={imp[f.name].title} />
+              {:else}
+                <label class="flex items-center gap-[0.3rem] text-[0.75rem] text-text-mute">
+                  chapters <Input class="w-[4.5rem]" type="number" min="1" bind:value={imp[f.name].count} />
+                </label>
+                <label class="flex items-center gap-[0.3rem] text-[0.75rem] text-text-mute">
+                  from # <Input class="w-[4.5rem]" bind:value={imp[f.name].start} />
+                </label>
+              {/if}
               <Button variant="secondary" size="mini" disabled={busy[f.name] || !targetId} onclick={() => doImport(f)}>
                 {#if busy[f.name]}<Spinner />{/if}
                 Import

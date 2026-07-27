@@ -47,7 +47,8 @@ public class LibraryServiceDeleteTests : IDisposable
         var epubExtractor = new EpubPageExtractor();
         var writers = new ChapterWriterSelector([new CbzChapterWriter(TestPageEncoding.Resolver), new FolderChapterWriter(TestPageEncoding.Resolver)], _config);
         var chapterImporter = new ChapterFileImporter(db, _paths, writers, artifactInspector, pdfExtractor, cbrExtractor, epubExtractor);
-        return new(db, _paths, _localPaths, artifactInspector, pdfExtractor, cbrExtractor, epubExtractor, chapterImporter, new AuthorResolver(db), new TagResolver(db));
+        var proseImporter = new ProseChapterImporter(db, _paths, new EpubChapterWriter());
+        return new(db, _paths, _localPaths, artifactInspector, pdfExtractor, cbrExtractor, epubExtractor, chapterImporter, proseImporter, new AuthorResolver(db), new TagResolver(db));
     }
 
     private LibraryService NewLibraryService(AppDbContext db)

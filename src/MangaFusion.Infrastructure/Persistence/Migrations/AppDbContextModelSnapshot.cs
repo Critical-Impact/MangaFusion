@@ -737,6 +737,9 @@ namespace MangaFusion.Infrastructure.Persistence.Migrations
                     b.Property<int>("PageIndex")
                         .HasColumnType("INTEGER");
 
+                    b.Property<float?>("ScrollFraction")
+                        .HasColumnType("REAL");
+
                     b.Property<DateTime>("UpdatedAt")
                         .HasColumnType("TEXT");
 
@@ -864,6 +867,9 @@ namespace MangaFusion.Infrastructure.Persistence.Migrations
                     b.Property<bool>("IsMetadataPrimary")
                         .HasColumnType("INTEGER");
 
+                    b.Property<int>("Kind")
+                        .HasColumnType("INTEGER");
+
                     b.Property<Guid>("SeriesId")
                         .HasColumnType("TEXT");
 
@@ -880,7 +886,7 @@ namespace MangaFusion.Infrastructure.Persistence.Migrations
 
                     b.HasIndex("SeriesId");
 
-                    b.HasIndex("SourceId", "SourceSeriesId")
+                    b.HasIndex("SourceId", "SourceSeriesId", "Kind")
                         .IsUnique();
 
                     b.ToTable("SeriesSourceLinks", (string)null);

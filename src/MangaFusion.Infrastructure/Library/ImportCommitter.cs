@@ -16,7 +16,7 @@ namespace MangaFusion.Infrastructure.Library;
 /// <see cref="ILibraryNotifier"/>, the same channel download progress already uses.</summary>
 public sealed class ImportCommitter(
     AppDbContext db, ILibraryService libraryService, ImportPaths paths, ChapterFileImporter chapterImporter,
-    ILibraryNotifier notifier, ILogger<ImportCommitter> logger)
+    ProseChapterImporter proseImporter, ILibraryNotifier notifier, ILogger<ImportCommitter> logger)
 {
     private const string DefaultLanguage = "en";
 
@@ -92,8 +92,19 @@ public sealed class ImportCommitter(
                 ? null
                 : new RelayProgress<int>(done => _ = ReportAsync(importSeries.Id, itemsDone, itemsTotal, done, pageTotal, CancellationToken.None));
 
-            await chapterImporter.ImportAsync(
-                series, sourcePath, ToSourceKind(item.Format), fileBaseName, DefaultLanguage, specs, ct, pageProgress);
+            var sourceKind = ToSourceKind(item.Format);
+            if (ChapterSourceKindClassifier.IsProse(sourceKind))
+            {
+                // Prose commits into an EPUB3 text artifact via the parallel importer (a text/mixed EPUB is
+                // stored as-is; text/PDF/txt/md are wrapped) — no rasterization, so no page-level progress.
+                await proseImporter.ImportAsync(
+                    series, sourcePath, sourceKind, fileBaseName, DefaultLanguage, specs, ct);
+            }
+            else
+            {
+                await chapterImporter.ImportAsync(
+                    series, sourcePath, sourceKind, fileBaseName, DefaultLanguage, specs, ct, pageProgress);
+            }
 
             // Mark the item imported the moment its chapter is durably in the DB, and *before* the source
             // file is removed. Ordered this way, a crash in the gap leaves a stray inbox file (harmless —
@@ -216,8 +227,11 @@ public sealed class ImportCommitter(
             ?? (isMerge
                 ? await MergeIntoExistingAsync(importSeries, ct)
                 : importSeries.MatchedSourceSeriesId is { } sourceSeriesId
+                    // createKind: the batch's library (the user's mode + per-kind inbox) is authoritative —
+                    // a MangaUpdates match supplies metadata, it doesn't get to land a light-novel import in
+                    // the manga library just because its type string wasn't exactly "Novel".
                     ? await libraryService.AddOrUpdateMetadataOnlyAsync(
-                        ImportMatcher.SourceFor(importSeries.Batch.Kind), sourceSeriesId, ct)
+                        ImportMatcher.SourceFor(importSeries.Batch.Kind), sourceSeriesId, importSeries.Batch.Kind, ct)
                     : await CreateUnmatchedSeriesAsync(importSeries.GroupTitle, importSeries.Batch.Kind, ct));
 
         if (importSeries.CommittedLibrarySeriesId != seriesId)
@@ -259,6 +273,7 @@ public sealed class ImportCommitter(
                 {
                     SourceId = matchSourceId,
                     SourceSeriesId = sourceSeriesId,
+                    Kind = series.Kind,
                     IsMetadataPrimary = false,
                 };
                 series.SourceLinks.Add(link);
@@ -284,6 +299,7 @@ public sealed class ImportCommitter(
         {
             SourceId = LocalSourceConstants.SourceId,
             SourceSeriesId = Guid.NewGuid().ToString("N"),
+            Kind = kind,
             IsMetadataPrimary = true,
         });
         db.Series.Add(series);
@@ -303,6 +319,7 @@ public sealed class ImportCommitter(
         {
             SourceId = LocalSourceConstants.SourceId,
             SourceSeriesId = Guid.NewGuid().ToString("N"),
+            Kind = series.Kind,
             IsMetadataPrimary = false,
         };
         series.SourceLinks.Add(link);
@@ -338,6 +355,10 @@ public sealed class ImportCommitter(
         ImportSourceFormat.Pdf => ChapterSourceKind.Pdf,
         ImportSourceFormat.Cbr => ChapterSourceKind.Cbr,
         ImportSourceFormat.Epub => ChapterSourceKind.Epub,
+        ImportSourceFormat.ProseEpub => ChapterSourceKind.ProseEpub,
+        ImportSourceFormat.ProsePdf => ChapterSourceKind.ProsePdf,
+        ImportSourceFormat.ProseText => ChapterSourceKind.ProseText,
+        ImportSourceFormat.ProseMarkdown => ChapterSourceKind.ProseMarkdown,
         _ => throw new ArgumentOutOfRangeException(nameof(format)),
     };
 }

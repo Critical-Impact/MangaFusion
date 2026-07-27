@@ -68,6 +68,10 @@ public sealed record LibraryChapterDto(
     string? ActiveGroup,
     int PageIndex,
     bool Completed,
+    /// <summary>The reader has any progress in this chapter — page turned, prose scrolled, or completed.
+    /// Unlike <see cref="PageIndex"/>, this also catches prose (whose position lives in ScrollFraction with
+    /// PageIndex left 0), so the UI can show read / in-progress / unread across every reader.</summary>
+    bool Started,
     DateTimeOffset? PublishedAt,
     IReadOnlyList<ReleaseDto> Releases,
     bool CanEdit);
@@ -95,6 +99,16 @@ public sealed record SetGroupsRequest(string[]? Groups);
 public sealed record SetPolicyRequest(int? GracePeriodDays, bool AutoDownload, string[]? Languages);
 
 public sealed record SaveProgressRequest(int PageIndex, bool Completed);
+
+/// <summary>Mark a chapter read (<c>true</c>) or unread (<c>false</c>) outside the reader.</summary>
+public sealed record SetReadRequest(bool Read);
+
+/// <summary>Prose reader progress: a 0..1 scroll fraction within the chapter's continuous-scroll column
+/// (the prose analogue of <see cref="SaveProgressRequest"/>'s page index).</summary>
+public sealed record SaveProseProgressRequest(float ScrollFraction, bool Completed);
+
+/// <summary>PDF reader progress: the 0-based page the reader is on.</summary>
+public sealed record SavePdfProgressRequest(int Page, bool Completed);
 
 public sealed record DownloadDto(
     Guid Id,

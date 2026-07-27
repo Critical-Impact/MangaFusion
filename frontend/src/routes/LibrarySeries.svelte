@@ -18,6 +18,7 @@
     deleteChapter,
     addReading,
     dismissReading,
+    markChapterRead,
     authorHref,
     genreSourceHref,
     getSources,
@@ -30,7 +31,7 @@
   import { progressByChapter } from '../lib/signalr.svelte'
   import { notify } from '../lib/notify'
   import { languagesState, ensureLanguagesLoaded, languageName } from '../lib/languages.svelte'
-  import { isComic } from '../lib/mode.svelte'
+  import { isComic, modeState } from '../lib/mode.svelte'
   import { t, facetGroups } from '../lib/terms.svelte'
   import Cover from '../lib/Cover.svelte'
   import AddToCollection from '../lib/AddToCollection.svelte'
@@ -173,8 +174,26 @@
     return downloaded.find((c) => !c.completed) ?? downloaded[downloaded.length - 1]
   })
   const hasReadingProgress = $derived(
-    (detail?.chapters ?? []).some((c) => c.downloaded && (c.completed || c.pageIndex > 0)),
+    (detail?.chapters ?? []).some((c) => c.downloaded && c.started),
   )
+
+  type ReadState = 'read' | 'reading' | 'unread'
+  function readState(c: LibraryChapter): ReadState {
+    return c.completed ? 'read' : c.started ? 'reading' : 'unread'
+  }
+
+  // Mark read/unread from the chapter menu. Optimistic — patch the chapter locally, then persist.
+  async function setRead(c: LibraryChapter, read: boolean) {
+    c.completed = read
+    c.started = read
+    detail = detail // nudge reactivity for the derived button/indicators
+    try {
+      await markChapterRead(c.id, read)
+    } catch (err) {
+      notify.error(err instanceof Error ? err.message : 'Failed to update.')
+      await load() // resync on failure
+    }
+  }
   const availableGroups = $derived(
     detail
       ? [...new Set(detail.chapters.flatMap((c) => c.releases.filter((r) => !r.isExternal).map((r) => r.groupKey).filter((g): g is string => !!g)))].sort()
@@ -702,9 +721,10 @@
       </div>
     </div>
 
-    <!-- Scanlation groups are a manga concept: a comic issue has exactly one canonical release, so
-         there is nothing to rank. -->
-    {#if isAdmin() && editMode && !isComic()}
+    <!-- Scanlation groups are a manga concept: ranking releases only makes sense where a downloadable
+         source produces competing group variants. A comic issue has one canonical release; light novels
+         have no download source in v1. Explicit manga allowlist, not "everything but comics". -->
+    {#if isAdmin() && editMode && modeState.kind === 'manga'}
       <Card class="mt-2 mb-5" size="sm">
         <CardContent>
           <Collapsible>
@@ -920,7 +940,29 @@
                 class="flex flex-wrap items-center justify-self-end gap-1.5 max-[640px]:col-span-2 max-[640px]:row-start-2 max-[640px]:w-full max-[640px]:justify-end"
               >
                 {#if c.downloaded}
-                  <Button variant="secondary" size="mini" href={`/read/${c.id}`} class="border-ok-border text-ok hover:border-ok">Read</Button>
+                  {#if readState(c) === 'read'}
+                    <span class="text-xs text-text-mute" title="Read">✓ Read</span>
+                  {:else if readState(c) === 'reading'}
+                    <span class="text-xs text-brand-soft" title="In progress">◐ Reading</span>
+                  {/if}
+                  <Button variant="secondary" size="mini" href={`/read/${c.id}`} class="border-ok-border text-ok hover:border-ok">
+                    {readState(c) === 'reading' ? 'Continue' : 'Read'}
+                  </Button>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger>
+                      {#snippet child({ props })}
+                        <Button {...props} variant="secondary" size="mini" title="Reading status">⋯</Button>
+                      {/snippet}
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" class="min-w-40">
+                      {#if readState(c) !== 'read'}
+                        <DropdownMenuItem onclick={() => setRead(c, true)}>Mark as read</DropdownMenuItem>
+                      {/if}
+                      {#if readState(c) !== 'unread'}
+                        <DropdownMenuItem onclick={() => setRead(c, false)}>Mark as unread</DropdownMenuItem>
+                      {/if}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                 {/if}
                 {#if hasDownloadable(c)}
                   {#if canDownload}

@@ -19,5 +19,8 @@ public sealed class ChapterWriterSelector
 
     public StorageFormat DefaultFormat { get; }
 
+    // StorageFormat.Prose is intentionally absent: prose is written by the parallel IProseChapterWriter,
+    // not through this selector, so a Prose lookup here throwing KeyNotFoundException is a canary that
+    // something routed a light novel down the image-page path — not a gap to "fix" by adding a branch.
     public IChapterWriter Get(StorageFormat? format = null) => _writers[format ?? DefaultFormat];
 }

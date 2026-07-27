@@ -13,9 +13,11 @@ public static class ReaderEndpoints
     {
         var group = app.MapGroup("/api/library").RequireAuthorization();
 
+        group.MapGet("/chapters/{id:guid}/reader-kind", GetReaderKind);
         group.MapGet("/chapters/{id:guid}/manifest", GetManifest);
         group.MapGet("/chapters/{id:guid}/pages/{index:int}", GetPage);
         group.MapPut("/chapters/{id:guid}/progress", SaveProgress);
+        group.MapPut("/chapters/{id:guid}/read", SetRead);
         group.MapGet("/chapters/{id:guid}/neighbors", GetNeighbors);
         group.MapGet("/continue-reading", ContinueReading);
         group.MapPost("/series/{id:guid}/reading", AddReading);
@@ -38,6 +40,14 @@ public static class ReaderEndpoints
 
     private static Guid CurrentUser(ClaimsPrincipal user) =>
         Guid.Parse(user.FindFirstValue(ClaimTypes.NameIdentifier)!);
+
+    /// <summary>Tells the client which reader to open a chapter in (text vs image), by the chapter's
+    /// active artifact format. Cheap DB-only lookup — the reader dispatch calls this before mounting.</summary>
+    private static async Task<IResult> GetReaderKind(Guid id, IReaderService reader, CancellationToken ct)
+    {
+        var kind = await reader.GetReaderKindAsync(id, ct);
+        return kind is null ? Results.NotFound() : Results.Ok(new { kind });
+    }
 
     private static async Task<IResult> GetManifest(
         Guid id, ClaimsPrincipal user, IReaderService reader, CancellationToken ct)
@@ -70,6 +80,13 @@ public static class ReaderEndpoints
         Guid id, SaveProgressRequest request, ClaimsPrincipal user, IReaderService reader, CancellationToken ct)
     {
         await reader.SaveProgressAsync(CurrentUser(user), id, request.PageIndex, request.Completed, ct);
+        return Results.NoContent();
+    }
+
+    private static async Task<IResult> SetRead(
+        Guid id, SetReadRequest request, ClaimsPrincipal user, IReaderService reader, CancellationToken ct)
+    {
+        await reader.SetChapterReadAsync(CurrentUser(user), id, request.Read, ct);
         return Results.NoContent();
     }
 

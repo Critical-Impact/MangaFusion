@@ -51,11 +51,15 @@ public class LocalImportServiceTests : IDisposable
         var epubExtractor = new EpubPageExtractor();
         var writers = new ChapterWriterSelector([new CbzChapterWriter(TestPageEncoding.Resolver), new FolderChapterWriter(TestPageEncoding.Resolver)], _config);
         var chapterImporter = new ChapterFileImporter(db, _paths, writers, artifactInspector, pdfExtractor, cbrExtractor, epubExtractor);
-        return new(db, _paths, _localPaths, artifactInspector, pdfExtractor, cbrExtractor, epubExtractor, chapterImporter, new AuthorResolver(db), new TagResolver(db));
+        var proseImporter = new ProseChapterImporter(db, _paths, new EpubChapterWriter());
+        return new(db, _paths, _localPaths, artifactInspector, pdfExtractor, cbrExtractor, epubExtractor, chapterImporter, proseImporter, new AuthorResolver(db), new TagResolver(db));
     }
 
     private ReaderService NewReader(AppDbContext db) =>
         new(db, new ArtifactReaderRegistry([new CbzArtifactReader(), new FolderArtifactReader(_paths)]), _paths);
+
+    private ProseReaderService NewProseReader(AppDbContext db) =>
+        new(db, new ProseArtifactReader(), _paths);
 
     private Task<string> WriteInboxCbzAsync(string baseName, params int[] segmentPageCounts) =>
         WriteInboxCbzAsync(baseName, MediaKind.Manga, segmentPageCounts);
@@ -142,6 +146,136 @@ public class LocalImportServiceTests : IDisposable
         var chapter = await db.Chapters.SingleAsync(c => c.SeriesId == seriesId);
         var page = await NewReader(db).OpenPageAsync(chapter.Id, 0);
         Assert.NotNull(page);
+    }
+
+    /// <summary>A .txt file in a light-novel library imports through the parallel prose pipeline: it lands
+    /// as a StorageFormat.Prose EPUB3 artifact under the light-novel root, and the prose reader serves its
+    /// text back (not the image-page reader).</summary>
+    [Fact]
+    public async Task A_text_file_imports_as_a_prose_artifact_readable_via_the_prose_reader()
+    {
+        await using var db = NewContext();
+        await db.Database.MigrateAsync();
+        var svc = NewService(db);
+
+        var inboxRoot = InboxRoot(MediaKind.LightNovel);
+        Directory.CreateDirectory(inboxRoot);
+        await File.WriteAllTextAsync(
+            Path.Combine(inboxRoot, "novel.txt"),
+            "The knight rode north.\n\nSnow fell for three days before the walls came into view.");
+
+        var seriesId = await svc.CreateSeriesAsync(Meta("A Prose Novel") with { Kind = MediaKind.LightNovel });
+        var added = await svc.ImportAsync(
+            seriesId, new LocalImportRequest("novel.txt", "en", [new LocalChapterSpec("1", null, "Chapter 1", 0)]));
+        Assert.Equal(1, added);
+
+        var series = await db.Series.Include(s => s.Artifacts).SingleAsync(s => s.Id == seriesId);
+        var artifact = Assert.Single(series.Artifacts);
+        Assert.Equal(StorageFormat.Prose, artifact.Format);
+        var absolute = _paths.Absolute(MediaKind.LightNovel, artifact.Path);
+        Assert.True(File.Exists(absolute), $"expected the EPUB under the light-novel root, at {absolute}");
+        Assert.EndsWith(".epub", absolute);
+        // Nothing leaked into the manga/comic trees.
+        Assert.Empty(Directory.EnumerateFileSystemEntries(_paths.Root(MediaKind.Manga)));
+
+        var chapter = await db.Chapters.SingleAsync(c => c.SeriesId == seriesId);
+        var content = await NewProseReader(db).GetProseContentAsync(chapter.Id);
+        Assert.NotNull(content);
+        Assert.Contains("knight rode north", content!.Html);
+        Assert.Contains("Snow fell for three days", content.Html);
+        Assert.True(content.WordCount > 5);
+
+        // The reader dispatch must route this to the text reader.
+        Assert.Equal("prose", await NewReader(db).GetReaderKindAsync(chapter.Id));
+    }
+
+    /// <summary>A light-novel PDF is stored verbatim (StorageFormat.Pdf) — not text-extracted or
+    /// rasterized — so the cover/illustrations/layout survive, and it routes to the PDF.js reader.</summary>
+    [Fact]
+    public async Task A_pdf_in_a_light_novel_library_is_stored_as_is_for_the_pdf_reader()
+    {
+        await using var db = NewContext();
+        await db.Database.MigrateAsync();
+        var svc = NewService(db);
+
+        var inboxRoot = InboxRoot(MediaKind.LightNovel);
+        Directory.CreateDirectory(inboxRoot);
+        // Content is opaque to the import path (a .pdf in a light-novel library is always kept as-is, no
+        // parsing), so arbitrary bytes with a PDF header stand in for a real volume here.
+        var pdfBytes = "%PDF-1.4\nfake pdf body bytes"u8.ToArray();
+        await File.WriteAllBytesAsync(Path.Combine(inboxRoot, "volume.pdf"), pdfBytes);
+
+        var seriesId = await svc.CreateSeriesAsync(Meta("A PDF Novel") with { Kind = MediaKind.LightNovel });
+        await svc.ImportAsync(
+            seriesId, new LocalImportRequest("volume.pdf", "en", [new LocalChapterSpec("1", "1", "Volume 1", 0)]));
+
+        var artifact = Assert.Single((await db.Series.Include(s => s.Artifacts).SingleAsync(s => s.Id == seriesId)).Artifacts);
+        Assert.Equal(StorageFormat.Pdf, artifact.Format);
+
+        var absolute = _paths.Absolute(MediaKind.LightNovel, artifact.Path);
+        Assert.EndsWith(".pdf", absolute);
+        Assert.Equal(pdfBytes, await File.ReadAllBytesAsync(absolute)); // byte-identical, stored as-is
+
+        var chapter = await db.Chapters.SingleAsync(c => c.SeriesId == seriesId);
+        Assert.Equal("pdf", await NewReader(db).GetReaderKindAsync(chapter.Id));
+        var pdf = await NewProseReader(db).ResolvePdfAsync(chapter.Id);
+        Assert.NotNull(pdf);
+        Assert.Equal(absolute, pdf!.AbsolutePath);
+    }
+
+    /// <summary>A text EPUB dropped into a light-novel inbox is detected as prose (not treated as an image
+    /// comic EPUB) and imports through the prose pipeline into a StorageFormat.Prose artifact.</summary>
+    [Fact]
+    public async Task A_text_epub_in_a_light_novel_library_is_detected_as_prose()
+    {
+        await using var db = NewContext();
+        await db.Database.MigrateAsync();
+        var svc = NewService(db);
+
+        var inboxRoot = InboxRoot(MediaKind.LightNovel);
+        Directory.CreateDirectory(inboxRoot);
+        // A body well past the prose-detection text threshold so it isn't mistaken for an image EPUB.
+        var body = "<p>" + string.Concat(Enumerable.Repeat(
+            "The lantern guttered as the wind slipped under the door and the old man kept reading. ", 12)) + "</p>";
+        await new EpubChapterWriter().WriteAsync(new ProseWriteRequest(
+            "Detected Novel", [], [], inboxRoot, "detected-novel",
+            [new ProseChapterSegment("1", null, "Chapter 1", "en", body, new Dictionary<string, string>())]));
+
+        var sourceBytes = await File.ReadAllBytesAsync(Path.Combine(inboxRoot, "detected-novel.epub"));
+
+        var seriesId = await svc.CreateSeriesAsync(Meta("Detected Novel") with { Kind = MediaKind.LightNovel });
+        await svc.ImportAsync(
+            seriesId, new LocalImportRequest("detected-novel.epub", "en", [new LocalChapterSpec("1", null, null, 0)]));
+
+        var artifact = Assert.Single((await db.Series.Include(s => s.Artifacts).SingleAsync(s => s.Id == seriesId)).Artifacts);
+        Assert.Equal(StorageFormat.Prose, artifact.Format);
+
+        // Store-as-is: the source EPUB is copied verbatim (not torn apart and re-encoded), so the stored
+        // artifact is byte-identical to what was dropped in the inbox.
+        var storedBytes = await File.ReadAllBytesAsync(_paths.Absolute(MediaKind.LightNovel, artifact.Path));
+        Assert.Equal(sourceBytes, storedBytes);
+
+        var chapter = await db.Chapters.SingleAsync(c => c.SeriesId == seriesId);
+        Assert.Equal("prose", await NewReader(db).GetReaderKindAsync(chapter.Id));
+        var content = await NewProseReader(db).GetProseContentAsync(chapter.Id);
+        Assert.Contains("lantern guttered", content!.Html);
+    }
+
+    /// <summary>Image imports still resolve to the image reader — the routing is per-artifact, so a mixed
+    /// library reads each chapter in the right reader.</summary>
+    [Fact]
+    public async Task A_cbz_import_resolves_to_the_image_reader()
+    {
+        await using var db = NewContext();
+        await db.Database.MigrateAsync();
+        var svc = NewService(db);
+
+        var fileName = await WriteInboxCbzAsync("image-ch", MediaKind.Manga, 2);
+        var seriesId = await svc.CreateSeriesAsync(Meta("Imaged"));
+        await svc.ImportAsync(seriesId, new LocalImportRequest(fileName, "en", [new LocalChapterSpec("1", null, null, 0)]));
+
+        var chapter = await db.Chapters.SingleAsync(c => c.SeriesId == seriesId);
+        Assert.Equal("image", await NewReader(db).GetReaderKindAsync(chapter.Id));
     }
 
     [Fact]

@@ -37,7 +37,11 @@ public interface ILibraryService
     /// <summary>Adds (or refreshes) a series' metadata from a metadata-only source (e.g. MangaUpdates)
     /// without requiring chapter capability and without touching chapters/artifacts. Returns the
     /// library series id.</summary>
-    Task<Guid> AddOrUpdateMetadataOnlyAsync(string sourceId, string sourceSeriesId, CancellationToken ct = default);
+    /// <summary><paramref name="createKind"/> pins the library a <em>newly-created</em> series lands in
+    /// (used by the import wizard, where the batch kind is the user's explicit choice); null falls back to
+    /// the source's per-series kind hint. Ignored for an already-linked series (its kind is fixed).</summary>
+    Task<Guid> AddOrUpdateMetadataOnlyAsync(
+        string sourceId, string sourceSeriesId, MediaKind? createKind = null, CancellationToken ct = default);
 
     /// <summary>Re-fetches a series' metadata from its metadata-primary source. Throws if it has no
     /// external metadata source to refresh from.</summary>
@@ -65,9 +69,12 @@ public interface ILibraryService
     /// our DB instead of hitting the source's API on every page load. Empty if never synced.</summary>
     Task<IReadOnlyList<SourceTag>> GetCachedSourceTagsAsync(string sourceId, CancellationToken ct = default);
 
-    /// <summary>Every series' id + title, unpaginated — for id-to-title lookups (e.g. the activity feed),
-    /// not for the browse UI which goes through <see cref="QueryLibraryAsync"/>.</summary>
-    Task<IReadOnlyList<(Guid Id, string Title)>> GetLibraryTitlesAsync(CancellationToken ct = default);
+    /// <summary>Every series' id + title, unpaginated — for id-to-title lookups (e.g. the activity feed)
+    /// and the import merge-target picker, not for the browse UI which goes through
+    /// <see cref="QueryLibraryAsync"/>. Pass a <paramref name="kind"/> to scope to one library (the merge
+    /// picker must, so a manga import can't offer a light-novel series as a merge target); null returns all.</summary>
+    Task<IReadOnlyList<(Guid Id, string Title)>> GetLibraryTitlesAsync(
+        MediaKind? kind = null, CancellationToken ct = default);
 
     /// <summary>Which of the given source refs are already in the library, mapped to their library series
     /// id — lets the browse grid mark already-added series (and link straight to them) without a query per

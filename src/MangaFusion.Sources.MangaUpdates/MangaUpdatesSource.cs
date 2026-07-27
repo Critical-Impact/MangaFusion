@@ -15,7 +15,9 @@ public sealed class MangaUpdatesSource(MangaUpdatesApiClient api) : IMetadataSou
 
     public SourceCapabilities Capabilities => SourceCapabilities.Metadata;
 
-    public IReadOnlyList<MediaKind> SupportedKinds => [MediaKind.Manga];
+    // MangaUpdates lists both manga and light novels (its "Novel" type). Manga stays first so it remains
+    // the primary/fallback kind; per-series routing to the light-novel library is by SourceSeries.Kind.
+    public IReadOnlyList<MediaKind> SupportedKinds => [MediaKind.Manga, MediaKind.LightNovel];
 
     public async Task<PagedResult<SourceSeries>> SearchAsync(SearchQuery query, CancellationToken ct = default)
     {

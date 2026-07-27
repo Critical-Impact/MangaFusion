@@ -47,6 +47,7 @@ public class InfrastructureModule : Module
         builder.RegisterType<SeriesCoverCache>().AsSelf().SingleInstance();
         builder.RegisterType<ChapterImporter>().AsSelf().InstancePerLifetimeScope();
         builder.RegisterType<ChapterFileImporter>().AsSelf().InstancePerLifetimeScope();
+        builder.RegisterType<ProseChapterImporter>().AsSelf().InstancePerLifetimeScope();
         builder.RegisterType<LibraryService>().As<ILibraryService>().InstancePerLifetimeScope();
         builder.RegisterType<CollectionCoverComposer>().AsSelf().SingleInstance();
         builder.RegisterType<CollectionService>().As<ICollectionService>().InstancePerLifetimeScope();
@@ -78,6 +79,13 @@ public class InfrastructureModule : Module
         builder.RegisterType<FolderArtifactReader>().As<IArtifactReader>().SingleInstance();
         builder.RegisterType<ArtifactReaderRegistry>().AsSelf().SingleInstance();
         builder.RegisterType<ReaderService>().As<IReaderService>().InstancePerLifetimeScope();
+
+        // Prose (light-novel) pipeline runs parallel to the image-page writer/reader above — served by its
+        // own interfaces, deliberately NOT registered in ChapterWriterSelector/ArtifactReaderRegistry (a
+        // StorageFormat.Prose lookup there is a canary, not a gap to fill with a branch).
+        builder.RegisterType<EpubChapterWriter>().As<IProseChapterWriter>().SingleInstance();
+        builder.RegisterType<ProseArtifactReader>().As<IProseArtifactReader>().SingleInstance();
+        builder.RegisterType<ProseReaderService>().As<IProseReaderService>().InstancePerLifetimeScope();
 
         builder.RegisterType<DownloadOrchestrator>().AsSelf().InstancePerLifetimeScope();
         builder.RegisterType<DownloadService>().As<IDownloadService>().InstancePerLifetimeScope();

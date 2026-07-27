@@ -84,7 +84,9 @@ public interface IImportService
     /// called directly.</summary>
     Task RunScanAsync(Guid batchId, CancellationToken ct);
 
-    Task<IReadOnlyList<ImportBatchSummary>> ListBatchesAsync(CancellationToken ct = default);
+    /// <summary>Import batches for one library only — scoped to <paramref name="kind"/> so a scan started
+    /// in one mode doesn't surface in another.</summary>
+    Task<IReadOnlyList<ImportBatchSummary>> ListBatchesAsync(MediaKind kind, CancellationToken ct = default);
 
     Task<ImportBatchDetail?> GetBatchAsync(Guid batchId, CancellationToken ct = default);
 
@@ -125,6 +127,21 @@ public interface IImportService
     /// On failure, reverts the series to NeedsReview with <c>CommitError</c> set, rather than leaving
     /// it stuck at Committing or in a dead-end Failed state — the user can fix the issue and retry.</summary>
     Task RunCommitAsync(Guid importSeriesId, CancellationToken ct);
+
+    /// <summary>Enqueues a single background job that commits every not-yet-committed series in the
+    /// batch with no conflict — at least one included item and no two included items resolving to the
+    /// same chapter number — the same conditions that enable the per-series Commit button, so the
+    /// reviewed no-conflict majority can be cleared in one action (the import equivalent of the
+    /// migration tool's "commit all clean matches"). Each eligible series is flipped to Committing
+    /// immediately (so the review UI reflects the queued state and keeps polling) and the job commits
+    /// them one at a time; a failure on one is recorded on it (reverted to NeedsReview with its
+    /// CommitError) and doesn't stop the rest. Throws if the batch is missing or nothing is eligible.</summary>
+    Task StartCommitAllCleanAsync(Guid batchId, CancellationToken ct = default);
+
+    // No RunCommitAllCleanAsync declared here (unlike RunCommitAsync above): it takes a Hangfire
+    // PerformContext (to stamp its own job id as a single writer) which this Hangfire-agnostic Application
+    // interface shouldn't depend on. Hangfire enqueues it against the concrete ImportService class
+    // directly — see StartCommitAllCleanAsync's implementation.
 
     /// <summary>Recovers a series stuck at Committing because its commit job crashed (see
     /// <see cref="ImportSeriesDetail.CommitJobCrashed"/>) — reverts it to NeedsReview so it can be

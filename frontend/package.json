@@ -27,6 +27,7 @@
     "@microsoft/signalr": "^10.0.0",
     "@tailwindcss/vite": "^4.3.2",
     "clsx": "^2.1.1",
+    "pdfjs-dist": "^4.10.38",
     "svelte-spa-router": "^5.1.1",
     "tailwind-merge": "^3.6.0",
     "tailwind-variants": "^3.2.2",

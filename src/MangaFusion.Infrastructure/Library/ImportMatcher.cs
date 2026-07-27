@@ -38,9 +38,31 @@ public sealed class ImportMatcher(ISourceRegistry registry)
             .OrderByDescending(s => CandidateRanking.Score(
                 TitleMatching.Score(title, [s.Title, .. s.AltTitles]),
                 s.ChapterCount,
-                localFileCount))
+                localFileCount) + NovelTitleBoost(kind, s))
             .ToList();
     }
+
+    /// <summary>A small ranking nudge toward a candidate MangaUpdates lists as a novel when the batch
+    /// being matched imports into the light-novel library. MangaUpdates lists a light novel and its manga
+    /// adaptation under near-identical titles, distinguishing the novel with a "(Novel)" (or "(Light
+    /// Novel)") suffix — e.g. "Mushoku Tensei (Novel)". <see cref="TitleMatching.Score"/> strips
+    /// punctuation, so that suffix reads as an extra "novel" token that actually <em>lowers</em> the
+    /// novel entry's similarity against a suffix-less inbox folder name — without this it loses to the
+    /// manga adaptation the user isn't importing. Deliberately small: it breaks near-ties toward the
+    /// novel, not overrides a clearly better title match. Zero for every other library, so manga/comic
+    /// ranking is unchanged.</summary>
+    public const double NovelTitleBoostAmount = 0.15;
+
+    public static double NovelTitleBoost(MediaKind kind, SourceSeries candidate) =>
+        kind == MediaKind.LightNovel
+        && (HasNovelSuffix(candidate.Title) || candidate.AltTitles.Any(HasNovelSuffix))
+            ? NovelTitleBoostAmount
+            : 0;
+
+    private static bool HasNovelSuffix(string? title) =>
+        title is not null
+        && (title.Contains("(novel)", StringComparison.OrdinalIgnoreCase)
+            || title.Contains("(light novel)", StringComparison.OrdinalIgnoreCase));
 
     /// <summary>Fetches one series by id — used when the user manually picks a match.</summary>
     public Task<SourceSeries?> GetSeriesAsync(MediaKind kind, string sourceSeriesId, CancellationToken ct) =>

@@ -172,7 +172,7 @@ public static class LibraryEndpoints
 
         var id = hasChapters
             ? await library.AddSeriesAsync(request.SourceId, request.SourceSeriesId, ct)
-            : await library.AddOrUpdateMetadataOnlyAsync(request.SourceId, request.SourceSeriesId, ct);
+            : await library.AddOrUpdateMetadataOnlyAsync(request.SourceId, request.SourceSeriesId, ct: ct);
 
         return Results.Ok(new { id });
     }
@@ -362,8 +362,9 @@ public static class LibraryEndpoints
         ILibraryService library, string? kind, CancellationToken ct) =>
         Results.Ok(await library.GetTagCatalogAsync(MediaKindQuery.Parse(kind), ct));
 
-    private static async Task<IResult> GetTitles(ILibraryService library, CancellationToken ct) =>
-        Results.Ok((await library.GetLibraryTitlesAsync(ct)).Select(s => new LibraryTitleDto(s.Id, s.Title)));
+    private static async Task<IResult> GetTitles(ILibraryService library, string? kind, CancellationToken ct) =>
+        Results.Ok((await library.GetLibraryTitlesAsync(MediaKindQuery.ParseOptional(kind), ct))
+            .Select(s => new LibraryTitleDto(s.Id, s.Title)));
 
     // Batch membership check for the browse grid: which of these source series are already in the
     // library, and under which library id (so the card can link straight there).
@@ -532,6 +533,7 @@ public static class LibraryEndpoints
             activeGroup,
             p?.PageIndex ?? 0,
             p?.Completed ?? false,
+            p is not null && (p.Completed || p.PageIndex > 0 || (p.ScrollFraction ?? 0) > 0),
             publishedAt,
             c.Releases
                 .OrderByDescending(r => r.PublishedAt)

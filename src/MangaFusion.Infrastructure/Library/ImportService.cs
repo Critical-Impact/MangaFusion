@@ -1,4 +1,5 @@
 using Hangfire;
+using Hangfire.Server;
 using MangaFusion.Application.Library;
 using MangaFusion.Application.Realtime;
 using MangaFusion.Domain.Library;
@@ -40,7 +41,7 @@ public sealed class ImportService(
 
         try
         {
-            var groups = scanner.ScanInbox(paths.InboxRoot(batch.Kind));
+            var groups = scanner.ScanInbox(paths.InboxRoot(batch.Kind), batch.Kind);
             logger.LogDebug(
                 "Import scan {BatchId}: found {Count} series group(s) in the {Kind} inbox.",
                 batchId, groups.Count, batch.Kind);
@@ -132,8 +133,12 @@ public sealed class ImportService(
         }
     }
 
-    public async Task<IReadOnlyList<ImportBatchSummary>> ListBatchesAsync(CancellationToken ct = default) =>
+    public async Task<IReadOnlyList<ImportBatchSummary>> ListBatchesAsync(
+        MediaKind kind, CancellationToken ct = default) =>
+        // Scoped to one library: batches from the manga inbox must not surface while the user is in the
+        // light-novel (or comic) library — each import section only lists its own kind's scans.
         (await db.ImportBatches
+            .Where(b => b.Kind == kind)
             .Include(b => b.Series)
             .OrderByDescending(b => b.CreatedAt)
             .ToListAsync(ct))
@@ -307,6 +312,152 @@ public sealed class ImportService(
         }
     }
 
+    public async Task StartCommitAllCleanAsync(Guid batchId, CancellationToken ct = default)
+    {
+        var batch = await db.ImportBatches
+            .Include(b => b.Series).ThenInclude(s => s.Items)
+            .AsSplitQuery()
+            .FirstOrDefaultAsync(b => b.Id == batchId, ct)
+            ?? throw new InvalidOperationException("Import batch not found.");
+
+        // A single or bulk commit is already in flight somewhere in the batch. Starting another would let
+        // the bulk job pick up a series being committed by a different job and commit it twice, so refuse
+        // — the same guard the review UI enforces by disabling the button, made authoritative server-side.
+        if (batch.Series.Any(s => s.Status == ImportSeriesStatus.Committing))
+        {
+            throw new InvalidOperationException("A commit is already in progress for this batch.");
+        }
+
+        var clean = batch.Series.Where(s => IsCommittableWithoutReview(s, batch.Kind)).ToList();
+        if (clean.Count == 0)
+        {
+            throw new InvalidOperationException("No series are ready to commit without conflicts.");
+        }
+
+        // Flip every eligible series to Committing up front — not just the one the job is about to work
+        // on — so the review UI reflects the queued state immediately and keeps polling (its "any series
+        // is Committing" activity check is what keeps the poll alive). Unlike the migration tool there's
+        // no batch-level Committing status to lean on, so this is what makes the bulk job visible.
+        foreach (var series in clean)
+        {
+            series.Status = ImportSeriesStatus.Committing;
+            series.CommitError = null;
+        }
+
+        await db.SaveChangesAsync(ct);
+
+        // Hand the job the exact ids it should commit rather than letting it re-query by status: a series
+        // being committed by a *different* job is also Committing, and a status-only query would scoop it
+        // up and double-commit it. The job stamps its own Hangfire id onto each series when it runs (see
+        // RunCommitAllCleanAsync) — the single-writer alternative to writing the id back here, which could
+        // race the job's own completion and leave a Committed series pointing at a finished job.
+        var ids = clean.Select(s => s.Id).ToList();
+        jobs.Enqueue<ImportService>(s => s.RunCommitAllCleanAsync(batchId, ids, null!, CancellationToken.None));
+    }
+
+    [AutomaticRetry(Attempts = 0)]
+    public async Task RunCommitAllCleanAsync(
+        Guid batchId, List<Guid> seriesIds, PerformContext context, CancellationToken ct)
+    {
+        // Exactly the series StartCommitAllCleanAsync flipped for this job — no other. Re-read fresh (the
+        // job can run much later) and drop any that are no longer Committing (e.g. reset in the meantime),
+        // then commit each; a failure on one is recorded on it and doesn't stop the rest.
+        var candidates = await db.ImportSeries
+            .Include(s => s.Items)
+            .Include(s => s.Batch)
+            .Where(s => s.BatchId == batchId && seriesIds.Contains(s.Id)
+                && s.Status == ImportSeriesStatus.Committing)
+            .ToListAsync(ct);
+
+        // Stamp this job's id onto its series as a single writer, so per-series crash detection
+        // (CommitJobCrashed) and ResetStuckCommit recovery can tell whether the owning job is alive.
+        var jobId = context?.BackgroundJob?.Id;
+        if (jobId is not null)
+        {
+            foreach (var series in candidates)
+            {
+                series.HangfireJobId = jobId;
+            }
+
+            await db.SaveChangesAsync(ct);
+        }
+
+        foreach (var importSeries in candidates)
+        {
+            try
+            {
+                await committer.CommitAsync(importSeries, ct);
+                // CommitAsync already saved Status = Committed; clear the (now stale) bulk job id off it.
+                importSeries.HangfireJobId = null;
+                await db.SaveChangesAsync(ct);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Import bulk commit failed for series {ImportSeriesId} ({Title}).",
+                    importSeries.Id, importSeries.GroupTitle);
+
+                // Revert to NeedsReview (not a dead-end Failed state) so the user can fix whatever's
+                // wrong and retry — a number collision against an existing chapter, a since-moved source
+                // file. One series failing must not abort the others still queued behind it.
+                importSeries.Status = ImportSeriesStatus.NeedsReview;
+                importSeries.CommitError = ex.Message;
+                importSeries.CommitItemsDone = null;
+                importSeries.CommitItemsTotal = null;
+                importSeries.CommitPageDone = null;
+                importSeries.CommitPageTotal = null;
+                importSeries.HangfireJobId = null;
+                await db.SaveChangesAsync(CancellationToken.None);
+
+                try
+                {
+                    await notifier.ImportCommitProgressAsync(
+                        importSeries.Id, "Failed", 0, 0, null, null, CancellationToken.None);
+                }
+                catch
+                {
+                    // best-effort — the polled batch status is the durable source of truth
+                }
+            }
+        }
+    }
+
+    /// <summary>Whether a bulk "commit all" should include this series: it's awaiting review, has at
+    /// least one included item, and no two included items resolve to the same chapter number (which
+    /// would collide on commit). Mirrors the per-series Commit button's own enable conditions — the UI's
+    /// definition of a series that's ready with no conflicts. The against-existing-chapters collision the
+    /// committer also guards isn't pre-checked here: if it does happen the series' own commit fails and
+    /// reverts to NeedsReview without stopping the rest, exactly as a per-series commit would.</summary>
+    private static bool IsCommittableWithoutReview(ImportSeries series, MediaKind kind)
+    {
+        if (series.Status != ImportSeriesStatus.NeedsReview)
+        {
+            return false;
+        }
+
+        var included = series.Items.Where(i => i.Include).ToList();
+        if (included.Count == 0)
+        {
+            return false;
+        }
+
+        // An included item the UI treats as a numbered chapter must actually carry a number — otherwise it
+        // commits as a blank "oneshot" key the user never confirmed. Comic issues are always chapter-mode;
+        // for manga a blank number legitimately means "whole volume", so only comics gate on it. Prose is
+        // whole-volume by nature and exempt. Mirrors the frontend's hasIncompleteChapters check.
+        if (kind == MediaKind.Comic
+            && included.Any(i => !IsProse(i.Format) && string.IsNullOrWhiteSpace(i.Number)))
+        {
+            return false;
+        }
+
+        var seenKeys = new HashSet<string>();
+        return included.All(i => seenKeys.Add(ChapterNumber.Normalize(i.Number, i.Volume).Key));
+    }
+
+    private static bool IsProse(ImportSourceFormat format) => format is
+        ImportSourceFormat.ProseEpub or ImportSourceFormat.ProsePdf
+        or ImportSourceFormat.ProseText or ImportSourceFormat.ProseMarkdown;
+
     /// <summary>Recovers a series stuck at Committing because its Hangfire commit job crashed (e.g. the
     /// app restarted mid-commit, so nothing ever ran RunCommitAsync's catch block) — same recovery as a
     /// normal commit failure. Throws if there's no commit in flight or its job still looks alive.</summary>
@@ -351,9 +502,12 @@ public sealed class ImportService(
         }
 
         var matchSourceId = ImportMatcher.SourceFor(importSeries.Batch.Kind);
+        // Scoped to the batch's kind: a source entry may back a series per kind, so a manga series linked
+        // to this MangaUpdates id must not make a light-novel import believe it's already linked.
         var alreadyLinked = await db.Series.AnyAsync(
-            s => s.SourceLinks.Any(l => l.SourceId == matchSourceId
-                                         && l.SourceSeriesId == importSeries.MatchedSourceSeriesId), ct);
+            s => s.Kind == importSeries.Batch.Kind
+                 && s.SourceLinks.Any(l => l.SourceId == matchSourceId
+                                           && l.SourceSeriesId == importSeries.MatchedSourceSeriesId), ct);
         if (alreadyLinked)
         {
             importSeries.ExistingLibrarySeriesId = null; // the committer will find it by link
@@ -398,6 +552,10 @@ public sealed class ImportService(
         ChapterSourceKind.Pdf => ImportSourceFormat.Pdf,
         ChapterSourceKind.Cbr => ImportSourceFormat.Cbr,
         ChapterSourceKind.Epub => ImportSourceFormat.Epub,
+        ChapterSourceKind.ProseEpub => ImportSourceFormat.ProseEpub,
+        ChapterSourceKind.ProsePdf => ImportSourceFormat.ProsePdf,
+        ChapterSourceKind.ProseText => ImportSourceFormat.ProseText,
+        ChapterSourceKind.ProseMarkdown => ImportSourceFormat.ProseMarkdown,
         _ => throw new ArgumentOutOfRangeException(nameof(kind)),
     };
 

@@ -141,6 +141,23 @@ public class ReaderServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task SetChapterRead_marks_read_then_unread_clears_the_row()
+    {
+        await using var db = NewContext();
+        await db.Database.MigrateAsync();
+        await SeedUsersAsync(db);
+        var (_, chapterId) = await SeedDownloadedChapterAsync(db, pages: 3);
+        var svc = NewService(db);
+
+        await svc.SetChapterReadAsync(_userA, chapterId, read: true);
+        var row = await db.ReadingProgress.SingleAsync(p => p.UserId == _userA && p.ChapterId == chapterId);
+        Assert.True(row.Completed);
+
+        await svc.SetChapterReadAsync(_userA, chapterId, read: false);
+        Assert.False(await db.ReadingProgress.AnyAsync(p => p.UserId == _userA && p.ChapterId == chapterId));
+    }
+
+    [Fact]
     public async Task Manifest_reports_pages_and_resume_point()
     {
         await using var db = NewContext();

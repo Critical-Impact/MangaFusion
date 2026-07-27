@@ -22,6 +22,7 @@
   import Activity from './routes/Activity.svelte'
   import SourceSettings from './routes/SourceSettings.svelte'
   import Reader from './routes/Reader.svelte'
+  import ReaderDispatch from './routes/ReaderDispatch.svelte'
   import Admin from './routes/Admin.svelte'
   import Profile from './routes/Profile.svelte'
 
@@ -35,7 +36,7 @@
     '/library/:id': LibrarySeries,
     '/collections': Collections,
     '/collections/:id': CollectionDetail,
-    '/read/:chapterId': Reader,
+    '/read/:chapterId': ReaderDispatch,
     '/preview/:sourceId/:chapterId': Reader,
     '/activity': Activity,
     '/admin': Admin,

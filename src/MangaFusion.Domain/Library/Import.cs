@@ -31,6 +31,14 @@ public enum ImportSourceFormat
     Pdf = 2,
     Cbr = 3,
     Epub = 4,
+
+    // Prose (light-novel) source formats — committed through the prose importer into an EPUB3 text
+    // artifact rather than the image-page pipeline. A text/mixed EPUB is stored as-is; text/PDF/txt/md are
+    // wrapped into an EPUB.
+    ProseEpub = 5,
+    ProsePdf = 6,
+    ProseText = 7,
+    ProseMarkdown = 8,
 }
 
 /// <summary>One run of the MangaUpdates-assisted import wizard over the import inbox. One group of

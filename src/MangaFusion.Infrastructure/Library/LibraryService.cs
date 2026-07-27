@@ -28,7 +28,7 @@ public sealed class LibraryService(
     {
         var chapterSource = registry.GetChapterSource(sourceId);
 
-        var (series, sourceSeries) = await ApplySourceMetadataAsync(sourceId, sourceSeriesId, ct);
+        var (series, sourceSeries) = await ApplySourceMetadataAsync(sourceId, sourceSeriesId, createKind: null, ct);
 
         var sourceChapters = await FetchAllChaptersAsync(chapterSource, sourceSeriesId, ct);
         await importer.ImportAsync(series, sourceChapters, ct);
@@ -46,9 +46,9 @@ public sealed class LibraryService(
     /// capability required) — used by the MangaUpdates-assisted import wizard and by re-fetching
     /// metadata for an already-imported series. Never touches chapters/artifacts.</summary>
     public async Task<Guid> AddOrUpdateMetadataOnlyAsync(
-        string sourceId, string sourceSeriesId, CancellationToken ct = default)
+        string sourceId, string sourceSeriesId, MediaKind? createKind = null, CancellationToken ct = default)
     {
-        var (series, sourceSeries) = await ApplySourceMetadataAsync(sourceId, sourceSeriesId, ct);
+        var (series, sourceSeries) = await ApplySourceMetadataAsync(sourceId, sourceSeriesId, createKind, ct);
         await db.SaveChangesAsync(ct);
 
         await TryCacheCoverAsync(series, sourceSeries, ct);
@@ -61,11 +61,22 @@ public sealed class LibraryService(
     /// the source's current metadata + cover. Shared by the full chapter-fetching add flow and the
     /// metadata-only flow; callers are responsible for their own <see cref="AppDbContext.SaveChangesAsync"/>.</summary>
     private async Task<(Series Series, SourceSeries SourceSeries)> ApplySourceMetadataAsync(
-        string sourceId, string sourceSeriesId, CancellationToken ct)
+        string sourceId, string sourceSeriesId, MediaKind? createKind, CancellationToken ct)
     {
         var metaSource = registry.GetMetadataSource(sourceId);
         var sourceSeries = await metaSource.GetSeriesAsync(sourceSeriesId, ct)
             ?? throw new InvalidOperationException($"Series '{sourceSeriesId}' not found on source '{sourceId}'.");
+
+        // A series added from a source lands in whichever library that series belongs to. When the
+        // caller knows the target library — the import wizard, whose batch kind (mode + per-kind inbox)
+        // is the user's explicit choice — that wins: a MangaUpdates match only supplies metadata, it
+        // doesn't get to re-decide the library out from under a light-novel import whose matched entry
+        // isn't typed "Novel". Otherwise fall back to the source's per-series hint (KindOf), which
+        // routes a MangaUpdates "Novel" into the light-novel library and everything else into manga.
+        // Either way the kind is authoritative for *resolution* too: one source entry may back a series
+        // per kind (a shared MangaUpdates id for a manga and its LN adaptation), so the find is scoped by
+        // kind — without it a light-novel import would reuse the manga series and collide on chapters.
+        var effectiveKind = createKind ?? MediaKinds.KindOf(metaSource, sourceSeries);
 
         var series = await db.Series
             .Include(s => s.SourceLinks)
@@ -73,17 +84,17 @@ public sealed class LibraryService(
             .Include(s => s.Authors)
             .Include(s => s.Artists)
             .FirstOrDefaultAsync(
-                s => s.SourceLinks.Any(l => l.SourceId == sourceId && l.SourceSeriesId == sourceSeriesId), ct);
+                s => s.Kind == effectiveKind
+                     && s.SourceLinks.Any(l => l.SourceId == sourceId && l.SourceSeriesId == sourceSeriesId), ct);
 
         if (series is null)
         {
-            // A series added from a source lands in whichever library that source serves — MangaDex and
-            // MangaUpdates in manga, ComicVine in comics. There's no ambiguity to resolve with the user.
-            series = new Series { Kind = MediaKinds.PrimaryKindOf(metaSource) };
+            series = new Series { Kind = effectiveKind };
             series.SourceLinks.Add(new SeriesSourceLink
             {
                 SourceId = sourceId,
                 SourceSeriesId = sourceSeriesId,
+                Kind = effectiveKind,
                 IsMetadataPrimary = true,
             });
             db.Series.Add(series);
@@ -167,7 +178,9 @@ public sealed class LibraryService(
             throw new InvalidOperationException("This series has no external metadata source to refresh from.");
         }
 
-        await AddOrUpdateMetadataOnlyAsync(link.SourceId, link.SourceSeriesId, ct);
+        // Pass the series' own kind, not KindOf's guess: a MangaUpdates "Novel"-typed entry can back a
+        // manga series, and re-deriving the kind here would re-resolve to (or create) the wrong one.
+        await AddOrUpdateMetadataOnlyAsync(link.SourceId, link.SourceSeriesId, series.Kind, ct);
     }
 
     private static IQueryable<Series> Sort(IQueryable<Series> items, string sort, string order)
@@ -227,15 +240,24 @@ public sealed class LibraryService(
             return;
         }
 
-        // A source's tag registry belongs to whichever library that source serves.
-        var kind = MediaKinds.PrimaryKindOf(registry.Get(sourceId));
+        // A source's tag registry belongs to every library it serves — for a multi-kind source
+        // (MangaUpdates spans manga + light novels) the same genre taxonomy has to exist under each kind so
+        // its facet filters populate in both. Tag.Kind deliberately duplicates rows per kind, so this is a
+        // per-kind resolve, not MangaUpdates-specific code.
         var refs = tags.Select(t => new SourceTagRef(t.Id, t.Name, t.Group)).ToList();
-        await tagResolver.ResolveSourceTagsAsync(kind, sourceId, refs, ct);
+        foreach (var kind in registry.Get(sourceId).SupportedKinds)
+        {
+            await tagResolver.ResolveSourceTagsAsync(MediaKinds.ToDomain(kind), sourceId, refs, ct);
+        }
+
         await db.SaveChangesAsync(ct);
     }
 
-    public async Task<IReadOnlyList<(Guid Id, string Title)>> GetLibraryTitlesAsync(CancellationToken ct = default) =>
-        (await db.Series.Select(s => new { s.Id, s.Title }).ToListAsync(ct))
+    public async Task<IReadOnlyList<(Guid Id, string Title)>> GetLibraryTitlesAsync(
+        MediaKind? kind = null, CancellationToken ct = default) =>
+        (await db.Series
+                .Where(s => kind == null || s.Kind == kind)
+                .Select(s => new { s.Id, s.Title }).ToListAsync(ct))
             .Select(s => (s.Id, s.Title))
             .ToList();
 

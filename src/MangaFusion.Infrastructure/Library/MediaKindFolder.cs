@@ -10,6 +10,7 @@ public static class MediaKindFolder
     public static string For(MediaKind kind) => kind switch
     {
         MediaKind.Comic => "comics",
+        MediaKind.LightNovel => "lightnovels",
         _ => "manga",
     };
 }

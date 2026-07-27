@@ -10,6 +10,7 @@
     setImportTitleOverride,
     setImportItem,
     commitImportSeries,
+    commitAllCleanImportSeries,
     resetStuckImportSeriesCommit,
     searchImportCandidates,
     getSeries,
@@ -224,18 +225,17 @@
     return series.status === 'NeedsReview' && !item.imported
   }
 
-  // Deliberately not routed through act(): that helper refetches the whole batch on success, which
-  // briefly disables every field in the row (all three shared one busy key) right as the user clicks
-  // into the next one — the field wouldn't accept the click until the refetch finished, so it took two
-  // clicks to move between fields. Updating the item in place avoids both the refetch and the shared
-  // busy key.
+  // Deliberately not routed through act() and deliberately sets no busy/disabled state: act() refetches
+  // the whole batch on success (a flicker), and any shared "saving" flag disables the row's other fields
+  // right as the user tabs/clicks into the next one — a disabled input can't take focus, so Tab would
+  // skip past it entirely and clicks were swallowed. This save fires on blur (per field), is idempotent
+  // (it always sends the full current draft), and updates the item in place, so nothing needs to be
+  // locked while it's in flight.
   async function saveItem(item: ImportItemDetail) {
     const d = itemDraft[item.id]
     const number = d.number.trim() || null
     const volume = d.volume.trim() || null
     const title = d.title.trim() || null
-    const key = item.id + ':fields'
-    busy[key] = true
     try {
       await setImportItem(item.id, item.include, number, volume, title)
       item.number = number
@@ -243,12 +243,36 @@
       item.title = title
     } catch (err) {
       notify.error(msgOf(err))
-    } finally {
-      busy[key] = false
+    }
+  }
+
+  // A prose (light-novel) item is a whole EPUB volume — it can't be split into numbered page-chapters, so
+  // it's always "whole volume" regardless of the toggle (which isn't shown for it).
+  const isProseItem = (i: ImportItemDetail) => i.format.startsWith('Prose')
+
+  // Which library the batch commits into — shown as a badge so an import can't silently land in the wrong
+  // one (the batch is scoped to the mode/inbox it was scanned from).
+  function batchKindLabel(kind: string): string {
+    switch (kind) {
+      case 'Comic': return 'Comics'
+      case 'LightNovel': return 'Light Novels'
+      default: return 'Manga'
+    }
+  }
+
+  // Friendly label for the raw ImportSourceFormat enum name (e.g. "ProseEpub" → "Prose (EPUB)").
+  function formatLabel(format: string): string {
+    switch (format) {
+      case 'ProseEpub': return 'EPUB'
+      case 'ProsePdf': return 'PDF'
+      case 'ProseText': return 'Prose (text)'
+      case 'ProseMarkdown': return 'Prose (Markdown)'
+      default: return format
     }
   }
 
   function modeOf(i: ImportItemDetail): 'volume' | 'chapter' {
+    if (isProseItem(i)) return 'volume'
     return isComicBatch ? 'chapter' : (itemMode[i.id] ?? (i.number ? 'chapter' : 'volume'))
   }
 
@@ -268,6 +292,24 @@
     // The commit itself now just enqueues a background job and returns — make sure polling is
     // running so we eventually see it finish even if the SignalR push is missed/disconnected.
     if (batch) watch(batch.id)
+  }
+
+  // Commits every conflict-free series in the batch in one background job (the import counterpart to
+  // migrate's "commit all clean matches"). The eligible series flip to Committing server-side, so poll
+  // the batch for completion the same way a single commit does.
+  async function commitAllClean() {
+    if (!batch) return
+    const id = batch.id
+    busy['commit-all'] = true
+    try {
+      await commitAllCleanImportSeries(id)
+      await openBatch(id)
+      watch(id)
+    } catch (err) {
+      notify.error(msgOf(err))
+    } finally {
+      busy['commit-all'] = false
+    }
   }
 
   // Prefers the live SignalR push (smooth, page-by-page); falls back to the batch's own persisted
@@ -356,6 +398,18 @@
   const hasIncompleteChapters = (items: ImportItemDetail[]) =>
     items.some((i) => i.include && modeOf(i) === 'chapter' && !draftFields(i).number)
 
+  // A series the "Commit all without conflicts" button will include — the same gate as the per-series
+  // Commit button: awaiting review, something to import, and no duplicate/incomplete numbers.
+  const isCommittable = (s: ImportSeriesDetail) =>
+    s.status === 'NeedsReview' &&
+    includedCount(s.items) > 0 &&
+    !hasDuplicateNumbers(s.items) &&
+    !hasIncompleteChapters(s.items)
+
+  let readyCount = $derived(batch ? batch.series.filter(isCommittable).length : 0)
+  // A bulk (or single) commit is in flight somewhere in the batch — block starting another / a scan.
+  let committing = $derived(batch ? batch.series.some((s) => s.status === 'Committing') : false)
+
   // Per-series toggle: view the table in file-scan order (default) or the projected commit order.
   let sortByOrder = $state<Record<string, boolean>>({})
 
@@ -373,7 +427,7 @@
   </p>
 
   <section class="flex items-center gap-[0.6rem]">
-    <Button onclick={scan} disabled={scanning}>
+    <Button onclick={scan} disabled={scanning || committing}>
       {#if scanning}<Spinner />{/if}
       {scanning ? 'Starting…' : 'Scan inbox'}
     </Button>
@@ -398,10 +452,22 @@
   {:else}
     <p class="flex items-center gap-1.5 text-[0.85rem] text-text-mute">
       {#if batch.status === 'Scanning'}<Spinner />{/if}
+      <span class="rounded-[var(--r-pill)] border border-brand-soft px-[0.4rem] py-[0.05rem] text-[0.72rem] font-medium text-brand-soft" title="Which library this batch imports into">
+        {batchKindLabel(batch.kind)}
+      </span>
       Batch {new Date(batch.createdAt).toLocaleString()} — <strong class={statusClass(batch.status)}>{batch.status}</strong>
       {#if batch.status === 'Scanning'}(matching against {matchSourceName}…){/if}
       {#if batch.error}<span class="text-err-soft"> — {batch.error}</span>{/if}
     </p>
+
+    {#if readyCount > 0 || committing}
+      <section class="flex flex-wrap items-center gap-[0.6rem]">
+        <Button variant="secondary" onclick={commitAllClean} disabled={busy['commit-all'] || committing || readyCount === 0}>
+          {#if busy['commit-all'] || committing}<Spinner />{/if}
+          {busy['commit-all'] || committing ? 'Committing…' : `Commit all without conflicts (${readyCount})`}
+        </Button>
+      </section>
+    {/if}
 
     {#if batch.series.length === 0 && batch.status !== 'Scanning'}
       <p class="text-[0.85rem] text-text-mute">No release folders found in the import inbox.</p>
@@ -664,16 +730,16 @@
                           </span>
                         {/if}
                       </td>
-                      <td class="border-b border-border-dim px-[0.4rem] py-[0.3rem] align-top">{i.format}</td>
+                      <td class="border-b border-border-dim px-[0.4rem] py-[0.3rem] align-top">{formatLabel(i.format)}</td>
                       {#if !isComicBatch}
                         <td class="border-b border-border-dim px-[0.4rem] py-[0.3rem] align-top">
-                          {#if !isEditable(s, i)}
+                          {#if !isEditable(s, i) || isProseItem(i)}
+                            <!-- A prose volume is inherently whole-volume; the split toggle doesn't apply. -->
                             {modeOf(i) === 'chapter' ? 'Chapter' : 'Whole volume'}
                           {:else}
                             <Select
                               type="single"
                               value={modeOf(i)}
-                              disabled={busy[i.id + ':fields']}
                               onValueChange={(v) => setMode(i, v as 'volume' | 'chapter')}
                             >
                               <SelectTrigger class="w-[8.5rem]">{modeOf(i) === 'chapter' ? 'Chapter' : 'Whole volume'}</SelectTrigger>
@@ -695,7 +761,6 @@
                             class="w-[5.5rem]"
                             placeholder="e.g. 12.5"
                             bind:value={itemDraft[i.id].number}
-                            disabled={busy[i.id + ':fields']}
                             onblur={() => saveItem(i)}
                           />
                         {/if}
@@ -707,7 +772,6 @@
                           <Input
                             class="w-[4.5rem]"
                             bind:value={itemDraft[i.id].volume}
-                            disabled={busy[i.id + ':fields']}
                             onblur={() => saveItem(i)}
                           />
                         {/if}
@@ -719,7 +783,6 @@
                           <Input
                             class="w-[8rem]"
                             bind:value={itemDraft[i.id].title}
-                            disabled={busy[i.id + ':fields']}
                             onblur={() => saveItem(i)}
                           />
                         {/if}

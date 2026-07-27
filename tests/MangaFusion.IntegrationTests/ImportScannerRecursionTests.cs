@@ -48,6 +48,34 @@ public class ImportScannerRecursionTests : IDisposable
         }
     }
 
+    private static async Task WriteProseEpubAsync(string path)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        var body = "<p>" + string.Concat(Enumerable.Repeat(
+            "The lantern guttered as the wind slipped under the door and the old man kept reading. ", 12)) + "</p>";
+        await new EpubChapterWriter().WriteAsync(new ProseWriteRequest(
+            "x", [], [], Path.GetDirectoryName(path)!, Path.GetFileNameWithoutExtension(path),
+            [new ProseChapterSegment("1", null, null, "en", body, new Dictionary<string, string>())]));
+    }
+
+    /// <summary>A light-novel volume EPUB dropped straight in the inbox root (no release subfolder) is
+    /// picked up as its own release and detected as prose, with no page count (it imports as one volume
+    /// chapter) — this is the shape the batch wizard needs to match a novel against MangaUpdates.</summary>
+    [Fact]
+    public async Task ScanInbox_detects_a_top_level_light_novel_epub_as_prose()
+    {
+        await WriteProseEpubAsync(Path.Combine(_inbox, "7th Time Loop - Volume 01.epub"));
+
+        var groups = _scanner.ScanInbox(_inbox, MediaKind.LightNovel);
+
+        var group = Assert.Single(groups);
+        Assert.Equal("7th Time Loop", group.GroupTitle);
+        var file = Assert.Single(group.Files);
+        Assert.Equal(ChapterSourceKind.ProseEpub, file.Kind);
+        Assert.Equal("1", file.ParsedVolume);
+        Assert.Equal(0, file.PageCount); // prose: whole-volume chapter, no page count
+    }
+
     /// <summary>A comic release is a folder of numbered issues, not a volume. The issue number has to come
     /// off each file — the folder name carries none — so that a comic import ends up with real chapter
     /// numbers rather than a pile of unnumbered whole-volume artifacts.</summary>
@@ -58,7 +86,7 @@ public class ImportScannerRecursionTests : IDisposable
         await WriteCbzAsync(Path.Combine(releaseDir, "100 Bullets #017"), pages: 2);
         await WriteCbzAsync(Path.Combine(releaseDir, "100 Bullets #018"), pages: 2);
 
-        var groups = _scanner.ScanInbox(_inbox);
+        var groups = _scanner.ScanInbox(_inbox, MediaKind.Manga);
 
         var group = Assert.Single(groups);
         Assert.Equal("100 Bullets", group.GroupTitle); // the "100" is the title, not an issue number
@@ -72,7 +100,7 @@ public class ImportScannerRecursionTests : IDisposable
         var releaseDir = Path.Combine(_inbox, "Some.Publisher-A.Series.Vol.01-Group");
         await WriteCbzAsync(Path.Combine(releaseDir, "nested", "chapter"), pages: 3);
 
-        var groups = _scanner.ScanInbox(_inbox);
+        var groups = _scanner.ScanInbox(_inbox, MediaKind.Manga);
 
         var group = Assert.Single(groups);
         Assert.Equal("A Series", group.GroupTitle);
@@ -88,7 +116,7 @@ public class ImportScannerRecursionTests : IDisposable
         var releaseDir = Path.Combine(_inbox, "Yen.Press-My.Great.Series.Vol.02-BitBook");
         await WriteCbzAsync(Path.Combine(releaseDir, "extras", "misleading.folder.name", "ch"), pages: 2);
 
-        var groups = _scanner.ScanInbox(_inbox);
+        var groups = _scanner.ScanInbox(_inbox, MediaKind.Manga);
 
         var group = Assert.Single(groups);
         Assert.Equal("My Great Series", group.GroupTitle);
@@ -103,7 +131,7 @@ public class ImportScannerRecursionTests : IDisposable
         await WriteCbzAsync(Path.Combine(releaseDir, "Some Series v01"), pages: 2);
         await WriteCbzAsync(Path.Combine(releaseDir, "Some Series v02"), pages: 2);
 
-        var groups = _scanner.ScanInbox(_inbox);
+        var groups = _scanner.ScanInbox(_inbox, MediaKind.Manga);
 
         var group = Assert.Single(groups);
         Assert.Equal(2, group.Files.Count);

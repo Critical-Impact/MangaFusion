@@ -20,6 +20,7 @@ public static class ImportEndpoints
         group.MapPatch("/series/{id:guid}/title", SetTitle);
         group.MapPatch("/items/{id:guid}", SetItem);
         group.MapPost("/series/{id:guid}/commit", CommitSeries);
+        group.MapPost("/batches/{id:guid}/commit-clean", CommitAllClean);
         group.MapPost("/series/{id:guid}/reset-stuck-commit", ResetStuckCommit);
     }
 
@@ -29,8 +30,8 @@ public static class ImportEndpoints
         return Results.Ok(new { batchId = id });
     }
 
-    private static async Task<IResult> ListBatches(IImportService import, CancellationToken ct) =>
-        Results.Ok(await import.ListBatchesAsync(ct));
+    private static async Task<IResult> ListBatches(IImportService import, string? kind, CancellationToken ct) =>
+        Results.Ok(await import.ListBatchesAsync(MediaKindQuery.Parse(kind), ct));
 
     private static async Task<IResult> GetBatch(Guid id, IImportService import, CancellationToken ct)
     {
@@ -115,6 +116,19 @@ public static class ImportEndpoints
         try
         {
             await import.StartCommitAsync(id, ct);
+            return Results.NoContent();
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(new { error = ex.Message });
+        }
+    }
+
+    private static async Task<IResult> CommitAllClean(Guid id, IImportService import, CancellationToken ct)
+    {
+        try
+        {
+            await import.StartCommitAllCleanAsync(id, ct);
             return Results.NoContent();
         }
         catch (InvalidOperationException ex)

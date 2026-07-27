@@ -56,8 +56,9 @@ public class ImportCommitterResumeTests : IDisposable
         // The unmatched-import path (no source match, no merge target) never reaches ILibraryService — and
         // it's the path that matters here, because it's the one that *creates* a series, so it's where a
         // non-idempotent retry would leave an orphan behind.
+        var proseImporter = new ProseChapterImporter(db, _paths, new EpubChapterWriter());
         return new ImportCommitter(
-            db, null!, _importPaths, chapterImporter, new NullNotifier(),
+            db, null!, _importPaths, chapterImporter, proseImporter, new NullNotifier(),
             NullLogger<ImportCommitter>.Instance);
     }
 

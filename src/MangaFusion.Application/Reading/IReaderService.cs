@@ -44,6 +44,12 @@ public sealed record OpenPageResult(Stream? Stream, string? ContentType, string 
 /// <summary>Reads downloaded chapters for the in-app reader and tracks per-user progress.</summary>
 public interface IReaderService
 {
+    /// <summary>Which reader a chapter needs, decided by its active artifact's <c>StorageFormat</c>:
+    /// <c>"prose"</c> for an EPUB3 text artifact, <c>"image"</c> for CBZ/folder pages, or null if the
+    /// chapter has no downloaded artifact. This is per-chapter, not per-library — a light-novel library
+    /// can hold both — so the client dispatches to the text or image reader on this alone.</summary>
+    Task<string?> GetReaderKindAsync(Guid chapterId, CancellationToken ct = default);
+
     Task<ChapterManifest?> GetManifestAsync(Guid userId, Guid chapterId, CancellationToken ct = default);
 
     /// <summary>Resolves the page's ETag first; if it matches <paramref name="ifNoneMatch"/> the archive
@@ -52,6 +58,11 @@ public interface IReaderService
         Guid chapterId, int pageIndex, string? ifNoneMatch = null, CancellationToken ct = default);
 
     Task SaveProgressAsync(Guid userId, Guid chapterId, int pageIndex, bool completed, CancellationToken ct = default);
+
+    /// <summary>Marks a chapter read (<paramref name="read"/> true → progress with <c>Completed</c>) or
+    /// unread (false → the per-user progress row is removed entirely). Reader-agnostic — works for manga,
+    /// prose and PDF chapters alike.</summary>
+    Task SetChapterReadAsync(Guid userId, Guid chapterId, bool read, CancellationToken ct = default);
 
     Task<ReaderNeighbors> GetNeighborsAsync(Guid chapterId, CancellationToken ct = default);
 

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { link } from 'svelte-spa-router'
   import { isAdmin } from '../lib/session.svelte'
-  import { isComic } from '../lib/mode.svelte'
+  import { modeState } from '../lib/mode.svelte'
   import AdminUsers from './admin/AdminUsers.svelte'
   import AdminSettings from './admin/AdminSettings.svelte'
   import AdminTasks from './admin/AdminTasks.svelte'
@@ -13,13 +13,13 @@
   let { params } = $props<{ params?: { section?: string } }>()
 
   // Migrate ingests the old MangaDex downloader's output — it matches files by their MangaDex chapter-UUID
-  // filename prefix and dedups by scanlation group, neither of which has a comic equivalent. It's a
-  // manga-only tool, so it isn't offered in the comic library at all.
+  // filename prefix and dedups by scanlation group, neither of which has a comic or light-novel equivalent.
+  // It's a manga-only tool (explicit allowlist, not "everything but comics"), so it's offered only there.
   const tabs = $derived([
     { id: 'users', label: 'Users' },
     { id: 'tasks', label: 'Tasks' },
     { id: 'local', label: 'Local' },
-    ...(isComic() ? [] : [{ id: 'migrate', label: 'Migrate' }]),
+    ...(modeState.kind === 'manga' ? [{ id: 'migrate', label: 'Migrate' }] : []),
     { id: 'import', label: 'Import' },
     { id: 'settings', label: 'Settings' },
     { id: 'sources', label: 'Sources' },

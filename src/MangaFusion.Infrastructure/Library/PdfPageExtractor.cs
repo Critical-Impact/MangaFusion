@@ -15,11 +15,20 @@ namespace MangaFusion.Infrastructure.Library;
 public sealed class PdfPageExtractor
 {
     private readonly SemaphoreSlim _gate;
+    private readonly RenderOptions _renderOptions;
 
     public PdfPageExtractor(IConfiguration config)
     {
         var max = config.GetValue<int?>("Import:MaxConcurrentPdfConversions") ?? 1;
         _gate = new SemaphoreSlim(Math.Max(1, max));
+
+        // Render each page at a bounded width (aspect-preserved) rather than PDFium's native/DPI size.
+        // An unbounded render of a large-media-box page allocates a bitmap big enough to fail outright
+        // ("Unable to allocate pixels for the bitmap"), especially under aggressive GC memory settings;
+        // capping the longest rendered edge keeps every page's bitmap allocation predictable while
+        // staying at a comfortable on-screen reading resolution. Tunable via Import:PdfMaxRenderWidth.
+        var maxWidth = Math.Max(400, config.GetValue<int?>("Import:PdfMaxRenderWidth") ?? 1800);
+        _renderOptions = new RenderOptions(Width: maxWidth, WithAspectRatio: true);
     }
 
     /// <summary>Page count only — cheap (reads the PDF's page tree, doesn't rasterize) — not gated by
@@ -58,7 +67,7 @@ public sealed class PdfPageExtractor
                 {
                     ct.ThrowIfCancellationRequested();
                     var dest = Path.Combine(destDir, $"{(i + 1).ToString().PadLeft(pad, '0')}.jpg");
-                    Conversion.SaveJpeg(dest, stream, i, leaveOpen: true);
+                    Conversion.SaveJpeg(dest, stream, i, leaveOpen: true, options: _renderOptions);
                     results.Add(dest);
                     pageProgress?.Report(i + 1);
                 }

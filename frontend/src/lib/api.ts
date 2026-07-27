@@ -333,6 +333,9 @@ export interface LibraryChapter {
   activeGroup: string | null
   pageIndex: number
   completed: boolean
+  /** Any reading progress (page turned, prose scrolled, or completed) — drives the read/reading/unread
+   *  indicator across every reader, since prose keeps its position in a scroll fraction not pageIndex. */
+  started: boolean
   publishedAt: string | null
   releases: LibraryRelease[]
   /** True if this chapter's active release was manually imported (local library / import wizard),
@@ -507,7 +510,8 @@ export function getLibraryTags(group?: string): Promise<TagInfo[]> {
 export const getLibraryTagCatalog = () =>
   getJson<TagInfo[]>(`/api/library/tags/catalog?kind=${currentKind()}`)
 
-export const getLibraryTitles = () => getJson<{ id: string; title: string }[]>('/api/library/series/titles')
+export const getLibraryTitles = () =>
+  getJson<{ id: string; title: string }[]>(`/api/library/series/titles?kind=${currentKind()}`)
 
 export const getLibrarySeries = (id: string) =>
   getJson<LibrarySeriesDetail>(`/api/library/series/${id}`)
@@ -627,6 +631,12 @@ export interface ContinueReadingItem {
   updatedAt: string
 }
 
+/** Which reader a chapter opens in — decided per-chapter by its artifact format, so a library can mix
+ *  prose (EPUB text reader), image (paged reader) and PDF (PDF.js reader) chapters. The `/read/:id`
+ *  dispatch calls this before mounting the right reader. */
+export const getReaderKind = (chapterId: string) =>
+  getJson<{ kind: 'prose' | 'image' | 'pdf' }>(`/api/library/chapters/${chapterId}/reader-kind`)
+
 export const getChapterManifest = (chapterId: string) =>
   getJson<ChapterManifest>(`/api/library/chapters/${chapterId}/manifest`)
 
@@ -637,8 +647,66 @@ export const pageUrl = (chapterId: string, index: number) =>
 export const saveProgress = (chapterId: string, pageIndex: number, completed: boolean) =>
   send<void>(`/api/library/chapters/${chapterId}/progress`, 'PUT', { pageIndex, completed })
 
+/** Mark a chapter read/unread outside the reader (unread clears all progress). */
+export const markChapterRead = (chapterId: string, read: boolean) =>
+  send<void>(`/api/library/chapters/${chapterId}/read`, 'PUT', { read })
+
 export const getNeighbors = (chapterId: string) =>
   getJson<ReaderNeighbors>(`/api/library/chapters/${chapterId}/neighbors`)
+
+// --- Prose reader (light novels: real text, continuous scroll, scroll-fraction progress) --------
+
+export interface ProseManifest {
+  chapterId: string
+  artifactId: string
+  seriesId: string
+  seriesTitle: string
+  number: string | null
+  volume: string | null
+  language: string
+  startScrollFraction: number
+  completed: boolean
+}
+
+export interface ProseContent {
+  html: string
+  wordCount: number
+}
+
+export const getProseManifest = (chapterId: string) =>
+  getJson<ProseManifest>(`/api/library/chapters/${chapterId}/prose/manifest`)
+
+export const getProseContent = (chapterId: string) =>
+  getJson<ProseContent>(`/api/library/chapters/${chapterId}/prose/content`)
+
+/** URL for one inline chapter image, already server-sanitized into the chapter HTML's <img src>. */
+export const proseImageUrl = (chapterId: string, name: string) =>
+  `/api/library/chapters/${chapterId}/prose/images/${name}`
+
+export const saveProseProgress = (chapterId: string, scrollFraction: number, completed: boolean) =>
+  send<void>(`/api/library/chapters/${chapterId}/prose/progress`, 'PUT', { scrollFraction, completed })
+
+// --- PDF reader (light-novel PDFs kept as-is, rendered fixed-layout by PDF.js) -------------------
+
+export interface PdfManifest {
+  chapterId: string
+  seriesId: string
+  seriesTitle: string
+  number: string | null
+  volume: string | null
+  language: string
+  startPage: number
+  completed: boolean
+}
+
+export const getPdfManifest = (chapterId: string) =>
+  getJson<PdfManifest>(`/api/library/chapters/${chapterId}/pdf/manifest`)
+
+/** URL for the raw PDF bytes — handed to PDF.js (range + ETag supported for progressive loading). */
+export const pdfUrl = (chapterId: string) => `/api/library/chapters/${chapterId}/pdf`
+
+export const savePdfProgress = (chapterId: string, page: number, completed: boolean) =>
+  send<void>(`/api/library/chapters/${chapterId}/pdf/progress`, 'PUT', { page, completed })
 
 // --- Preview reader (read live from a source, no library / no progress) -----------------------
 
@@ -781,6 +849,9 @@ export interface InboxItem {
   kind: string
   pageCount: number
   sizeBytes: number
+  /** True if the backend detected reflowable text (prose) rather than page images — drives whether the
+   *  import controls are "one chapter" (prose) or page-split (image). */
+  prose: boolean
 }
 
 export interface LocalChapterSpec {
@@ -983,7 +1054,8 @@ export interface ImportBatchSummary {
 export const startImportScan = () =>
   send<{ batchId: string }>(`/api/import/scan?kind=${currentKind()}`, 'POST', {})
 
-export const getImportBatches = () => getJson<ImportBatchSummary[]>('/api/import/batches')
+export const getImportBatches = () =>
+  getJson<ImportBatchSummary[]>(`/api/import/batches?kind=${currentKind()}`)
 
 export const getImportBatch = (id: string) => getJson<ImportBatchDetail>(`/api/import/batches/${id}`)
 
@@ -1023,6 +1095,12 @@ export const setImportItem = (
 
 export const commitImportSeries = (seriesId: string) =>
   send<void>(`/api/import/series/${seriesId}/commit`, 'POST', {})
+
+// Enqueues one background job that commits every series in the batch with no conflicts (at least one
+// included item, no duplicate numbers) — the import equivalent of migrate's "commit all clean matches".
+// Each such series flips to Committing immediately; poll the batch for completion.
+export const commitAllCleanImportSeries = (batchId: string) =>
+  send<void>(`/api/import/batches/${batchId}/commit-clean`, 'POST', {})
 
 // Recovers a series stuck at "Committing" because its commit job crashed. Rejected if the job still
 // looks alive — only a confirmed-dead one can be reset.

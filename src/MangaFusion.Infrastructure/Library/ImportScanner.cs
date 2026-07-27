@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using MangaFusion.Domain.Library;
 
 namespace MangaFusion.Infrastructure.Library;
 
@@ -50,7 +51,7 @@ public sealed class ImportScanner(ChapterFileImporter chapterImporter)
     private static readonly Regex TrailingGroupPattern = new(@"-[A-Za-z0-9]+$", RegexOptions.Compiled);
     private static readonly Regex YearTokenPattern = new(@"^(19|20)\d{2}$", RegexOptions.Compiled);
 
-    public IReadOnlyList<ScannedImportGroup> ScanInbox(string inboxRoot)
+    public IReadOnlyList<ScannedImportGroup> ScanInbox(string inboxRoot, MediaKind kind)
     {
         if (!Directory.Exists(inboxRoot))
         {
@@ -60,7 +61,17 @@ public sealed class ImportScanner(ChapterFileImporter chapterImporter)
         var files = new List<ScannedImportFile>();
         foreach (var dir in Directory.EnumerateDirectories(inboxRoot).OrderBy(d => d, StringComparer.OrdinalIgnoreCase))
         {
-            files.AddRange(ScanReleaseFolder(dir));
+            files.AddRange(ScanReleaseFolder(dir, kind));
+        }
+
+        // A single file dropped directly in the inbox root (common for light novels — one EPUB per volume,
+        // no release subfolder) is its own release, keyed off the file name rather than a folder name.
+        foreach (var file in Directory.EnumerateFiles(inboxRoot).OrderBy(f => f, StringComparer.OrdinalIgnoreCase))
+        {
+            if (ScanLooseFile(file, kind) is { } loose)
+            {
+                files.Add(loose);
+            }
         }
 
         return files
@@ -90,7 +101,7 @@ public sealed class ImportScanner(ChapterFileImporter chapterImporter)
     /// first (a batch folder can contain several volumes' worth of files, each named "v03" etc.),
     /// falling back to the release folder name's guess when the individual file/subfolder name carries
     /// no volume marker of its own.</summary>
-    private List<ScannedImportFile> ScanReleaseFolder(string dir)
+    private List<ScannedImportFile> ScanReleaseFolder(string dir, MediaKind kind)
     {
         var folderName = Path.GetFileName(dir);
         var (title, folderVolume, folderIssue) = ParseFolderName(folderName);
@@ -99,25 +110,7 @@ public sealed class ImportScanner(ChapterFileImporter chapterImporter)
         foreach (var file in Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories)
                      .OrderBy(f => f, StringComparer.OrdinalIgnoreCase))
         {
-            var kind = ChapterSourceKindClassifier.FromFileName(file);
-            if (kind is null)
-            {
-                continue;
-            }
-
-            int pages;
-            try
-            {
-                pages = chapterImporter.CountPages(file, kind.Value);
-            }
-            catch (InvalidOperationException)
-            {
-                // e.g. an EPUB that turns out to be reflowable text rather than an image-based comic,
-                // or a corrupt archive — not importable, so skip it rather than failing the whole scan.
-                continue;
-            }
-
-            if (pages == 0)
+            if (ClassifyFile(file, kind) is not (var sourceKind, var pages))
             {
                 continue;
             }
@@ -125,7 +118,7 @@ public sealed class ImportScanner(ChapterFileImporter chapterImporter)
             var stem = Path.GetFileNameWithoutExtension(file);
             var volume = ParseVolume(stem) ?? folderVolume;
             results.Add(new ScannedImportFile(
-                folderName, Path.GetRelativePath(dir, file), file, kind.Value, title, volume, pages,
+                folderName, Path.GetRelativePath(dir, file), file, sourceKind, title, volume, pages,
                 new FileInfo(file).Length, ParseIssue(stem) ?? folderIssue));
         }
 
@@ -156,6 +149,50 @@ public sealed class ImportScanner(ChapterFileImporter chapterImporter)
         }
 
         return results;
+    }
+
+    /// <summary>Classifies one file for the batch's library and resolves its page count, or null if it
+    /// isn't importable. Prose files (light-novel text/EPUB/PDF) carry no page count — they import as a
+    /// whole-volume chapter — so they report 0 and are still included; image files must yield a positive
+    /// page count (a reflowable EPUB or corrupt archive throws and is skipped).</summary>
+    private (ChapterSourceKind Kind, int PageCount)? ClassifyFile(string file, MediaKind kind)
+    {
+        var sourceKind = ChapterSourceKindClassifier.ClassifyForKind(file, kind);
+        if (sourceKind is null)
+        {
+            return null;
+        }
+
+        if (ChapterSourceKindClassifier.IsProse(sourceKind.Value))
+        {
+            return (sourceKind.Value, 0);
+        }
+
+        try
+        {
+            var pages = chapterImporter.CountPages(file, sourceKind.Value);
+            return pages == 0 ? null : (sourceKind.Value, pages);
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>A single importable file sitting directly in the inbox root (no release subfolder). Its
+    /// own name seeds the title/volume guess and it commits from the inbox root (empty folder name).</summary>
+    private ScannedImportFile? ScanLooseFile(string file, MediaKind kind)
+    {
+        if (ClassifyFile(file, kind) is not (var sourceKind, var pages))
+        {
+            return null;
+        }
+
+        var stem = Path.GetFileNameWithoutExtension(file);
+        var (title, volume, issue) = ParseFolderName(stem);
+        return new ScannedImportFile(
+            "", Path.GetFileName(file), file, sourceKind, title, volume, pages,
+            new FileInfo(file).Length, kind == MediaKind.Comic ? issue : null);
     }
 
     private static string? ParseVolume(string text)
@@ -239,7 +276,10 @@ public sealed class ImportScanner(ChapterFileImporter chapterImporter)
             .Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Where(t => !NoiseTokens.Contains(t) && !YearTokenPattern.IsMatch(t));
 
-        var title = string.Join(' ', titleTokens).Trim();
+        // Trim separator punctuation left dangling at the ends once a volume/issue token is pulled out —
+        // light-novel names use a " - Volume NN" dash separator (not the scene-release "." convention), so
+        // removing the volume leaves a trailing " -" that would otherwise ride along into the title.
+        var title = string.Join(' ', titleTokens).Trim().Trim('-', '_', '–', ' ').Trim();
         return (title.Length > 0 ? title : folderName, volume, issue);
     }
 }

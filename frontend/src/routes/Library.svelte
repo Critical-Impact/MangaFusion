@@ -4,7 +4,7 @@
   import { PagedSeriesSearch } from '../lib/pagedSeriesSearch.svelte'
   import { BestEffortList } from '../lib/bestEffortList.svelte'
   import { isComic } from '../lib/mode.svelte'
-  import { t, facetGroups } from '../lib/terms.svelte'
+  import { t, facetGroups, canBrowse } from '../lib/terms.svelte'
   import PosterCard from '../lib/PosterCard.svelte'
   import FilterBar from '../lib/FilterBar.svelte'
   import MultiSelectDropdown from '../lib/MultiSelectDropdown.svelte'
@@ -120,8 +120,14 @@
     <p class="muted">
       {#if hasFilters}
         No matches.
-      {:else if isComic()}
-        Your comic library is empty. Import comics from the inbox under Admin → Import.
+      {:else if !canBrowse()}
+        <!-- No Browse for this kind (comics, light novels) — the library fills from local imports, so
+             point at the importer rather than telling the user to search a catalogue that doesn't exist. -->
+        {#if isComic()}
+          Your comic library is empty. Import comics from the inbox under Admin → Import.
+        {:else}
+          Your light novel library is empty. Import novels from the inbox under Admin → Local.
+        {/if}
       {:else}
         Your library is empty. Search and open a series to add it.
       {/if}

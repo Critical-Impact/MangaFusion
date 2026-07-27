@@ -21,6 +21,13 @@ const VOCAB = {
     Chapters: 'Issues',
     library: 'Comics',
   },
+  lightnovel: {
+    chapter: 'chapter',
+    Chapter: 'Chapter',
+    chapters: 'chapters',
+    Chapters: 'Chapters',
+    library: 'Light Novels',
+  },
 } as const
 
 type Term = keyof (typeof VOCAB)['manga']
@@ -31,11 +38,15 @@ export function t(term: Term): string {
 
 /** Whether the current library has a catalogue worth browsing.
  *
- * Browse exists to find something and download it. Comics have no downloadable source — ComicVine is
- * metadata-only, and comics enter the library from local files via the import wizard (which does its own
- * ComicVine matching). A comic Browse page would be a search that ends in a dead end, so there isn't one. */
+ * Browse exists to find something and download it, so only a kind with a downloadable source gets one.
+ * An explicit allowlist, not an exclusion list, so a newly-added kind is browse-less by default rather
+ * than silently inheriting manga's Browse page:
+ * - Manga has MangaDex (an IDownloadSource) — the one browsable kind today.
+ * - Comics: ComicVine is metadata-only; comics enter via the local-import wizard's own matching.
+ * - Light novels: MangaUpdates is metadata-only and no download source exists in v1; they enter via
+ *   local prose import. A Browse page would be a search that ends in a dead end. */
 export function canBrowseKind(kind: MediaKind): boolean {
-  return kind !== 'comic'
+  return kind === 'manga'
 }
 
 export function canBrowse(): boolean {

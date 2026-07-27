@@ -53,8 +53,9 @@ public class MergeTargetKindTests : IDisposable
             db, _paths, writers, new ArtifactFileInspector(), new PdfPageExtractor(_config),
             new CbrPageExtractor(), new EpubPageExtractor());
 
+        var proseImporter = new ProseChapterImporter(db, _paths, new EpubChapterWriter());
         return new ImportCommitter(
-            db, null!, _importPaths, chapterImporter, new NullNotifier(), NullLogger<ImportCommitter>.Instance);
+            db, null!, _importPaths, chapterImporter, proseImporter, new NullNotifier(), NullLogger<ImportCommitter>.Instance);
     }
 
     private void StageCbz(string fileName)

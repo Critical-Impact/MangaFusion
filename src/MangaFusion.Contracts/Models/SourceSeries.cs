@@ -32,6 +32,12 @@ public sealed record SourceSeries
     /// that don't expose per-tag ids/groups.</summary>
     public IReadOnlyList<SourceTagRef> TagRefs { get; init; } = [];
 
+    /// <summary>Which library <em>this particular series</em> belongs to, set only by a source whose
+    /// <see cref="Sources.ISource.SupportedKinds"/> spans more than one kind (e.g. MangaUpdates, which
+    /// lists both manga and light novels). Null ⇒ use the source's primary/only kind, preserving the
+    /// single-kind behaviour byte-for-byte for every other source.</summary>
+    public MediaKind? Kind { get; init; }
+
     public ContentRating ContentRating { get; init; } = ContentRating.Unknown;
     public PublicationStatus Status { get; init; } = PublicationStatus.Unknown;
     public int? Year { get; init; }

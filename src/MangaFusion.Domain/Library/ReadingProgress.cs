@@ -13,5 +13,12 @@ public class ReadingProgress
 
     public int PageIndex { get; set; }
     public bool Completed { get; set; }
+
+    /// <summary>Fine-grained resume position within a prose chapter's continuous scroll, 0..1
+    /// (<c>scrollTop / (scrollHeight - clientHeight)</c>). Prose-only and nullable — the paged image
+    /// reader leaves it null and relies on <see cref="PageIndex"/>. <see cref="Completed"/> stays
+    /// authoritative for "is this chapter read" in both readers.</summary>
+    public float? ScrollFraction { get; set; }
+
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
 }

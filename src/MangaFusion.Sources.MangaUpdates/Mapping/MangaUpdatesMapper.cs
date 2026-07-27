@@ -27,9 +27,21 @@ internal static class MangaUpdatesMapper
             Status = MapStatus(dto.Status, dto.Completed),
             Year = int.TryParse(dto.Year, out var year) ? year : null,
             OriginalLanguage = MapOriginalLanguage(dto.Type),
+            Kind = MapKind(dto.Type),
             SiteUrl = dto.Url,
         };
     }
+
+    /// <summary>Routes a MangaUpdates "type" to the library the series belongs to. "Novel" ⇒ light novel;
+    /// the known comic-family types map explicitly to manga (not null) so that a future, unenumerated type
+    /// string is the only thing that falls through to the source's primary kind — and it's been seen here
+    /// first, rather than silently vanishing.</summary>
+    private static MediaKind? MapKind(string? type) => type switch
+    {
+        "Novel" => MediaKind.LightNovel,
+        "Manga" or "Manhwa" or "Manhua" or "Doujinshi" or "Artbook" or "OEL" => MediaKind.Manga,
+        _ => null,
+    };
 
     // Lowercase to match every other source's group convention (MangaDex's "genre"/"theme"/..., ComicVine's
     // "publisher"/"character"/"concept") — group is a stable filter-facet key, not display text, and a

@@ -12,6 +12,7 @@
 export const MODES = [
   { kind: 'manga', brand: 'MangaFusion', label: 'Manga' },
   { kind: 'comic', brand: 'ComicFusion', label: 'Comics' },
+  { kind: 'lightnovel', brand: 'LightNovelFusion', label: 'Light Novels' },
 ] as const
 
 export type MediaKind = (typeof MODES)[number]['kind']

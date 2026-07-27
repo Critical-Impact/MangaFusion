@@ -18,6 +18,16 @@ public enum ChapterSourceKind
     Pdf,
     Cbr,
     Epub,
+
+    // Prose (light-novel) source kinds. These never reach the image-page ChapterFileImporter — they're
+    // dispatched to ProseChapterImporter — but they are members of this shared enum so the inbox listing
+    // and classifier can name them. A whole file imports as one chapter (no page-count splitting).
+    // ProseEpub/ProsePdf are the text-bearing variants of Epub/Pdf, chosen by content detection (a
+    // light-novel library can hold both a scanned image comic and a real text novel).
+    ProseEpub,
+    ProsePdf,
+    ProseText,
+    ProseMarkdown,
 }
 
 /// <summary>Turns one source file (CBZ, image folder, or PDF) plus a set of chapter specs into a
@@ -54,21 +64,7 @@ public sealed class ChapterFileImporter(
         var specs = NormalizeSpecs(chapters, total);
 
         // Reject duplicate chapter numbers (both within the request and against existing chapters).
-        var keyed = specs
-            .Select(s => (Spec: s, Key: ChapterNumber.QualifyKey(series.SortMode, ChapterNumber.Normalize(s.Number, s.Volume).Key, s.Volume)))
-            .ToList();
-        var existing = series.Chapters
-            .Where(c => c.Language == language)
-            .Select(c => c.NumberKey)
-            .ToHashSet();
-        var seen = new HashSet<string>();
-        foreach (var (_, key) in keyed)
-        {
-            if (!seen.Add(key) || existing.Contains(key))
-            {
-                throw new InvalidOperationException($"Chapter '{key}' already exists in {language}.");
-            }
-        }
+        var keyed = ChapterKeys.KeyAndEnsureUnique(series, language, specs);
 
         // Not the OS temp dir — see LibraryPaths.TempRoot for why (small tmpfs in containers can run
         // out of space partway through rasterizing a large PDF, exactly as happened in practice).

@@ -24,8 +24,11 @@ public sealed record LocalSeriesMetadata(
     /// libraries later, since its chapters, tags and progress all hang off the kind it was created with.</summary>
     MediaKind Kind = MediaKind.Manga);
 
-/// <summary>An importable file/folder discovered in the local inbox.</summary>
-public sealed record InboxItem(string Name, string Kind, int PageCount, long SizeBytes);
+/// <summary>An importable file/folder discovered in the local inbox. <paramref name="Prose"/> is set when
+/// the file was detected as reflowable text (light-novel prose) rather than page images — it drives which
+/// import controls the UI shows (a prose file imports as one chapter; an image file splits by page
+/// count). <paramref name="PageCount"/> is 0 for prose (meaningless there).</summary>
+public sealed record InboxItem(string Name, string Kind, int PageCount, long SizeBytes, bool Prose = false);
 
 /// <summary>A local series, for the import target picker.</summary>
 public sealed record LocalSeriesSummary(Guid Id, string Title);

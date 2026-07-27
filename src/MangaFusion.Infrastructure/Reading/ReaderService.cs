@@ -14,6 +14,22 @@ public sealed class ReaderService(
     ArtifactReaderRegistry readers,
     LibraryPaths paths) : IReaderService
 {
+    public async Task<string?> GetReaderKindAsync(Guid chapterId, CancellationToken ct = default)
+    {
+        var format = await db.Chapters
+            .Where(c => c.Id == chapterId && c.ActiveArtifactId != null)
+            .Select(c => (StorageFormat?)c.ActiveArtifact!.Format)
+            .FirstOrDefaultAsync(ct);
+
+        return format switch
+        {
+            null => null,
+            StorageFormat.Prose => "prose",
+            StorageFormat.Pdf => "pdf",
+            _ => "image",
+        };
+    }
+
     public async Task<ChapterManifest?> GetManifestAsync(Guid userId, Guid chapterId, CancellationToken ct = default)
     {
         var chapter = await db.Chapters
@@ -122,6 +138,36 @@ public sealed class ReaderService(
 
         progress.PageIndex = clamped;
         progress.Completed = isComplete;
+        progress.UpdatedAt = DateTimeOffset.UtcNow;
+        await db.SaveChangesAsync(ct);
+    }
+
+    public async Task SetChapterReadAsync(
+        Guid userId, Guid chapterId, bool read, CancellationToken ct = default)
+    {
+        var progress = await db.ReadingProgress
+            .FirstOrDefaultAsync(p => p.UserId == userId && p.ChapterId == chapterId, ct);
+
+        if (!read)
+        {
+            // Unread = no progress row at all, so it reads as never-opened everywhere (Started/pageIndex/
+            // scroll all fall back to their empty defaults).
+            if (progress is not null)
+            {
+                db.ReadingProgress.Remove(progress);
+                await db.SaveChangesAsync(ct);
+            }
+
+            return;
+        }
+
+        if (progress is null)
+        {
+            progress = new ReadingProgress { UserId = userId, ChapterId = chapterId };
+            db.ReadingProgress.Add(progress);
+        }
+
+        progress.Completed = true;
         progress.UpdatedAt = DateTimeOffset.UtcNow;
         await db.SaveChangesAsync(ct);
     }

@@ -623,8 +623,9 @@ public sealed class MigrationService(
         }
 
         var alreadyLinked = await db.Series.AnyAsync(
-            s => s.SourceLinks.Any(l => l.SourceId == MigrationMatcher.SourceId
-                                         && l.SourceSeriesId == migrationSeries.MatchedSourceSeriesId), ct);
+            s => s.Kind == migrationSeries.Batch.Kind
+                 && s.SourceLinks.Any(l => l.SourceId == MigrationMatcher.SourceId
+                                           && l.SourceSeriesId == migrationSeries.MatchedSourceSeriesId), ct);
         if (alreadyLinked)
         {
             migrationSeries.ExistingLibrarySeriesId = null; // FindOrCreateSeriesAsync will find it by link

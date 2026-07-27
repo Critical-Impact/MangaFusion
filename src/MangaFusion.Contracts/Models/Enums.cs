@@ -19,6 +19,7 @@ public enum MediaKind
 {
     Manga = 0,
     Comic = 1,
+    LightNovel = 2,
 }
 
 /// <summary>Neutral content rating; each source maps its own values onto this.</summary>

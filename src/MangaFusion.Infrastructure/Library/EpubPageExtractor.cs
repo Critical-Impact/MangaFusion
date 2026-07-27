@@ -53,59 +53,15 @@ public sealed class EpubPageExtractor
         return results;
     }
 
-    /// <summary>Walks container.xml -> OPF manifest/spine and resolves each spine item, in reading
-    /// order, to the single full-page image entry it represents. Throws if the EPUB is DRM-encrypted
-    /// (image bytes would be garbage) or if any spine item doesn't cleanly resolve to exactly one image
-    /// with no more than incidental surrounding text — i.e. this isn't an image-based comic EPUB.
+    /// <summary>Resolves each spine item (via the shared <see cref="EpubZipPaths.ResolveSpine"/>), in
+    /// reading order, to the single full-page image entry it represents. Throws if any spine item doesn't
+    /// cleanly resolve to exactly one image with no more than incidental surrounding text — i.e. this
+    /// isn't an image-based comic EPUB. (DRM/structural rejection happens inside the shared helper.)
     /// </summary>
-    private static List<string> ResolveSpinePages(ZipArchive zip)
-    {
-        if (zip.GetEntry("META-INF/encryption.xml") is not null)
-        {
-            throw new InvalidOperationException("This EPUB is DRM-protected and can't be imported.");
-        }
-
-        var opfPath = FindOpfPath(zip);
-        var opfDir = ZipDirectoryOf(opfPath);
-        var opf = LoadXml(zip, opfPath);
-        var ns = opf.Root!.Name.Namespace;
-
-        var manifestElement = opf.Root.Element(ns + "manifest")
-            ?? throw new InvalidOperationException("EPUB package document has no <manifest>.");
-        var manifest = manifestElement.Elements(ns + "item")
-            .Where(e => (string?)e.Attribute("id") is not null && (string?)e.Attribute("href") is not null)
-            .ToDictionary(
-                e => (string)e.Attribute("id")!,
-                e => (
-                    Href: ResolveZipPath(opfDir, (string)e.Attribute("href")!),
-                    MediaType: (string?)e.Attribute("media-type") ?? string.Empty));
-
-        var spineElement = opf.Root.Element(ns + "spine")
-            ?? throw new InvalidOperationException("EPUB package document has no <spine>.");
-        var spine = spineElement.Elements(ns + "itemref")
-            .Select(e => (string?)e.Attribute("idref"))
-            .Where(id => id is not null)
-            .Select(id => id!)
+    private static List<string> ResolveSpinePages(ZipArchive zip) =>
+        EpubZipPaths.ResolveSpine(zip)
+            .Select(item => ResolveSpinePage(zip, item.Href, item.MediaType))
             .ToList();
-
-        if (spine.Count == 0)
-        {
-            throw new InvalidOperationException("EPUB spine is empty.");
-        }
-
-        var pages = new List<string>(spine.Count);
-        foreach (var idref in spine)
-        {
-            if (!manifest.TryGetValue(idref, out var item))
-            {
-                throw new InvalidOperationException($"EPUB spine references unknown manifest item '{idref}'.");
-            }
-
-            pages.Add(ResolveSpinePage(zip, item.Href, item.MediaType));
-        }
-
-        return pages;
-    }
 
     private static string ResolveSpinePage(ZipArchive zip, string href, string mediaType)
     {
@@ -120,8 +76,8 @@ public sealed class EpubPageExtractor
             throw NotImageBased(href);
         }
 
-        var doc = LoadXml(zip, href);
-        var baseDir = ZipDirectoryOf(href);
+        var doc = EpubZipPaths.LoadXml(zip, href);
+        var baseDir = EpubZipPaths.ZipDirectoryOf(href);
         var body = doc.Descendants()
             .FirstOrDefault(e => e.Name.LocalName.Equals("body", StringComparison.OrdinalIgnoreCase))
             ?? doc.Root;
@@ -148,7 +104,7 @@ public sealed class EpubPageExtractor
                         ?.Value;
                     if (!string.IsNullOrWhiteSpace(src))
                     {
-                        images.Add(ResolveZipPath(baseDir, src));
+                        images.Add(EpubZipPaths.ResolveZipPath(baseDir, src));
                     }
                 }
                 else if (!el.HasElements)
@@ -169,61 +125,4 @@ public sealed class EpubPageExtractor
     private static InvalidOperationException NotImageBased(string itemPath) => new(
         $"This EPUB contains reflowable text content ('{itemPath}') and isn't supported — only " +
         "image-based/fixed-layout comic EPUBs can be imported.");
-
-    private static string FindOpfPath(ZipArchive zip)
-    {
-        var container = LoadXml(zip, "META-INF/container.xml");
-        var ns = container.Root!.Name.Namespace;
-        var fullPath = container.Root.Element(ns + "rootfiles")?.Elements(ns + "rootfile")
-            .Select(e => (string?)e.Attribute("full-path"))
-            .FirstOrDefault(p => !string.IsNullOrEmpty(p));
-
-        return fullPath ?? throw new InvalidOperationException("EPUB container.xml has no rootfile.");
-    }
-
-    private static XDocument LoadXml(ZipArchive zip, string entryName)
-    {
-        var entry = zip.GetEntry(entryName)
-            ?? throw new InvalidOperationException($"EPUB is missing '{entryName}'.");
-        using var stream = entry.Open();
-        return XDocument.Load(stream);
-    }
-
-    private static string ZipDirectoryOf(string zipPath)
-    {
-        var slash = zipPath.LastIndexOf('/');
-        return slash < 0 ? string.Empty : zipPath[..slash];
-    }
-
-    /// <summary>Resolves an EPUB-internal relative href against the zip-entry path of the document it
-    /// came from, normalizing "./"/"../" segments (zip entries always use forward slashes regardless of
-    /// OS) and URI-decoding percent-escapes and stripping any "#fragment".</summary>
-    private static string ResolveZipPath(string baseDir, string href)
-    {
-        var decoded = Uri.UnescapeDataString(href.Split('#')[0]);
-        var combined = string.IsNullOrEmpty(baseDir) ? decoded : $"{baseDir}/{decoded}";
-
-        var parts = new List<string>();
-        foreach (var segment in combined.Split('/'))
-        {
-            if (segment.Length == 0 || segment == ".")
-            {
-                continue;
-            }
-
-            if (segment == "..")
-            {
-                if (parts.Count > 0)
-                {
-                    parts.RemoveAt(parts.Count - 1);
-                }
-
-                continue;
-            }
-
-            parts.Add(segment);
-        }
-
-        return string.Join('/', parts);
-    }
 }
