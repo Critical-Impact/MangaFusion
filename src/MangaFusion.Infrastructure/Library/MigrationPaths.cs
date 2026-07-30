@@ -3,8 +3,10 @@ using Microsoft.Extensions.Configuration;
 
 namespace MangaFusion.Infrastructure.Library;
 
-/// <summary>Resolves the migration tool's inbox and outbox (duplicate/quarantined files set aside for the
-/// user).
+/// <summary>Resolves the migration tool's inbox and outbox. The outbox is split into <c>Removed</c>
+/// (whole series taken off the review list), <c>Duplicate</c> (a losing copy of an already-imported
+/// chapter), and <c>Quarantine</c> (failed the integrity filter — no pages / corrupt), so everything the
+/// tool has set aside is easy to tell apart at a glance instead of one flat pile.
 ///
 /// The <b>inbox is not split per kind</b>: this tool only ingests the old MangaDex downloader's output —
 /// it matches files by their MangaDex chapter-UUID filename prefix and dedups by scanlation group, neither
@@ -24,7 +26,9 @@ public sealed class MigrationPaths
         Directory.CreateDirectory(InboxRoot());
         foreach (var kind in Enum.GetValues<MediaKind>())
         {
-            Directory.CreateDirectory(OutboxRoot(kind));
+            Directory.CreateDirectory(RemovedRoot(kind));
+            Directory.CreateDirectory(DuplicateRoot(kind));
+            Directory.CreateDirectory(QuarantineRoot(kind));
         }
     }
 
@@ -40,11 +44,24 @@ public sealed class MigrationPaths
         return Path.GetFullPath(Path.Combine(root, MediaKindFolder.For(kind)));
     }
 
+    public string RemovedRoot(MediaKind kind) => Path.Combine(OutboxRoot(kind), "Removed");
+
+    public string DuplicateRoot(MediaKind kind) => Path.Combine(OutboxRoot(kind), "Duplicate");
+
+    public string QuarantineRoot(MediaKind kind) => Path.Combine(OutboxRoot(kind), "Quarantine");
+
     public string SeriesInboxFolder(string folderName) => Path.Combine(InboxRoot(), folderName);
 
-    public string SeriesOutboxFolder(MediaKind kind, string folderName)
+    public string SeriesDuplicateFolder(MediaKind kind, string folderName)
     {
-        var dir = Path.Combine(OutboxRoot(kind), LibraryPaths.Sanitize(folderName));
+        var dir = Path.Combine(DuplicateRoot(kind), LibraryPaths.Sanitize(folderName));
+        Directory.CreateDirectory(dir);
+        return dir;
+    }
+
+    public string SeriesQuarantineFolder(MediaKind kind, string folderName)
+    {
+        var dir = Path.Combine(QuarantineRoot(kind), LibraryPaths.Sanitize(folderName));
         Directory.CreateDirectory(dir);
         return dir;
     }

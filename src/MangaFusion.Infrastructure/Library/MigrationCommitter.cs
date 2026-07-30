@@ -17,7 +17,8 @@ namespace MangaFusion.Infrastructure.Library;
 /// <summary>Commits one reviewed (or auto-clean) <see cref="MigrationSeries"/>: creates or merges the
 /// library series, imports the full source feed (so purged series still get whatever the feed still
 /// knows — e.g. external retail stubs — exactly like a normal add-to-library), then overlays the
-/// winning local files as artifacts and moves every other file to the outbox. Nothing on disk moves
+/// winning local files as artifacts and moves every other file aside into the outbox's Duplicate or
+/// Quarantine subfolder. Nothing on disk moves
 /// until this runs. Winning files also get their pages re-encoded in place via
 /// <see cref="ArtifactPageReencoder"/> (lossless WebP where that shrinks them), same as freshly
 /// downloaded/imported chapters.</summary>
@@ -103,7 +104,7 @@ public sealed class MigrationCommitter(
         foreach (var item in migrationSeries.Items.Where(i =>
                      i.Disposition is MigrationItemDisposition.Duplicate or MigrationItemDisposition.Quarantine))
         {
-            MoveToOutbox(series.Kind, migrationSeries.FolderName, item.FileName);
+            MoveAside(series.Kind, migrationSeries.FolderName, item.FileName, item.Disposition);
         }
 
         if (migrationSeries.GroupRanking.Count > 0)
@@ -392,7 +393,7 @@ public sealed class MigrationCommitter(
         return (destDir, paths.RelativeTo(kind, destDir));
     }
 
-    private void MoveToOutbox(MediaKind kind, string folderName, string fileName)
+    private void MoveAside(MediaKind kind, string folderName, string fileName, MigrationItemDisposition disposition)
     {
         var sourcePath = Path.Combine(migrationPaths.SeriesInboxFolder(folderName), fileName);
         if (!File.Exists(sourcePath) && !Directory.Exists(sourcePath))
@@ -400,7 +401,9 @@ public sealed class MigrationCommitter(
             return; // already moved (e.g. re-running commit after a partial failure)
         }
 
-        var destDir = migrationPaths.SeriesOutboxFolder(kind, folderName);
+        var destDir = disposition == MigrationItemDisposition.Duplicate
+            ? migrationPaths.SeriesDuplicateFolder(kind, folderName)
+            : migrationPaths.SeriesQuarantineFolder(kind, folderName);
         var dest = LibraryPaths.UniquePath(Path.Combine(destDir, fileName));
         if (File.Exists(sourcePath))
         {

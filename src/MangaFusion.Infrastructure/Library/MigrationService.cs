@@ -557,16 +557,16 @@ public sealed class MigrationService(
         var sourceDir = paths.SeriesInboxFolder(migrationSeries.FolderName);
         if (Directory.Exists(sourceDir))
         {
-            // Whole folder, not per-file like MigrationCommitter's outbox moves: nothing here was reviewed
+            // Whole folder, not per-file like MigrationCommitter's aside-moves: nothing here was reviewed
             // item-by-item, so there's no winner/duplicate split to preserve.
-            var destDir = UniquePath(Path.Combine(paths.OutboxRoot(migrationSeries.Batch.Kind), migrationSeries.FolderName));
+            var destDir = UniquePath(Path.Combine(paths.RemovedRoot(migrationSeries.Batch.Kind), migrationSeries.FolderName));
             Directory.Move(sourceDir, destDir);
         }
 
         db.MigrationSeries.Remove(migrationSeries);
         await db.SaveChangesAsync(ct);
         logger.LogInformation(
-            "Migration review: removed series {SeriesId} ({Folder}) from the batch; its folder was moved to the outbox.",
+            "Migration review: removed series {SeriesId} ({Folder}) from the batch; its folder was moved to the outbox's Removed folder.",
             migrationSeriesId, migrationSeries.FolderName);
     }
 

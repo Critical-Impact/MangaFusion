@@ -637,8 +637,8 @@
                     <AlertDialogHeader>
                       <AlertDialogTitle>Remove "{s.matchedTitle ?? s.comicInfoSeriesTitle ?? s.folderName}"?</AlertDialogTitle>
                       <AlertDialogDescription>
-                        Nothing is imported. Its inbox folder is moved to the outbox and this entry drops off the
-                        list — a future scan won't pick it up again unless you move the folder back.
+                        Nothing is imported. Its inbox folder is moved to the outbox's Removed folder and this entry
+                        drops off the list — a future scan won't pick it up again unless you move the folder back.
                       </AlertDialogDescription>
                     </AlertDialogHeader>
                     <AlertDialogFooter>
