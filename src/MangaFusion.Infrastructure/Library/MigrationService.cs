@@ -4,6 +4,7 @@ using MangaFusion.Application.Realtime;
 using MangaFusion.Domain.Library;
 using MangaFusion.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace MangaFusion.Infrastructure.Library;
@@ -18,6 +19,7 @@ public sealed class MigrationService(
     IBackgroundJobClient jobs,
     ILibraryNotifier notifier,
     CommitJobHealth jobHealth,
+    IServiceScopeFactory scopes,
     ILogger<MigrationService> logger) : IMigrationService
 {
     public async Task<Guid> StartScanAsync(CancellationToken ct = default)
@@ -243,17 +245,51 @@ public sealed class MigrationService(
         }
         catch (Exception ex)
         {
-            migrationSeries.Status = MigrationSeriesStatus.Failed;
-            migrationSeries.ConflictReason = $"Commit failed: {ex.Message}";
-            migrationSeries.CommitItemsDone = null;
-            migrationSeries.CommitItemsTotal = null;
-            logger.LogError(ex, "Migration commit failed for series {SeriesId} ({Folder}).",
-                migrationSeries.Id, migrationSeries.FolderName);
+            LogCommitFailure(ex, migrationSeries.Id, migrationSeries.FolderName, "single-series");
+
+            // The failed SaveChanges above may leave db's tracker holding the same conflicting
+            // entries — clear it and write the outcome directly (same reasoning as the bulk path in
+            // RunCommitAllCleanAsync) so it can't be defeated by the very state that caused it.
+            db.ChangeTracker.Clear();
+            await db.MigrationSeries
+                .Where(s => s.Id == migrationSeriesId)
+                .ExecuteUpdateAsync(s => s
+                    .SetProperty(x => x.Status, MigrationSeriesStatus.Failed)
+                    .SetProperty(x => x.ConflictReason, $"Commit failed: {ex.Message}")
+                    .SetProperty(x => x.CommitItemsDone, (int?)null)
+                    .SetProperty(x => x.CommitItemsTotal, (int?)null)
+                    .SetProperty(x => x.HangfireJobId, (string?)null),
+                    CancellationToken.None);
+            await db.MigrationBatches
+                .Where(b => b.Id == batch.Id)
+                .ExecuteUpdateAsync(b => b.SetProperty(x => x.Status, MigrationBatchStatus.Done), CancellationToken.None);
+            return;
         }
 
         migrationSeries.HangfireJobId = null;
         batch.Status = MigrationBatchStatus.Done;
         await db.SaveChangesAsync(CancellationToken.None);
+    }
+
+    private void LogCommitFailure(Exception ex, Guid seriesId, string folderName, string kind)
+    {
+        logger.LogError(ex, "Migration {Kind} commit failed for series {SeriesId} ({Folder}).",
+            kind, seriesId, folderName);
+
+        // DbUpdateConcurrencyException doesn't say which entity/table tripped the affected-row
+        // check — log it explicitly so a live failure is diagnosable from this log alone rather than
+        // needing a repro.
+        if (ex is DbUpdateConcurrencyException concurrencyEx)
+        {
+            foreach (var entry in concurrencyEx.Entries)
+            {
+                var keyValues = entry.Metadata.FindPrimaryKey()?.Properties
+                    .Select(p => $"{p.Name}={entry.Property(p.Name).CurrentValue}") ?? [];
+                logger.LogError(
+                    "Migration commit conflict detail: {EntityType} ({State}) {Key}.",
+                    entry.Metadata.ClrType.Name, entry.State, string.Join(",", keyValues));
+            }
+        }
     }
 
     public async Task StartCommitAllCleanAsync(Guid batchId, CancellationToken ct = default)
@@ -313,9 +349,25 @@ public sealed class MigrationService(
             foreach (var series in clean)
             {
                 jobToken.ThrowIfCancellationRequested();
+
+                // Each series commits against its own scope/DbContext, not the outer `db` used for
+                // batch bookkeeping. A series whose SaveChanges throws leaves whatever it dirtied
+                // still tracked as Added/Modified; reusing that same context for the next
+                // SaveChanges — even just to record this series as Failed — reissues the identical
+                // broken command and throws again, taking the whole batch down instead of just this
+                // series (see MonitorScanJob, which isolates per-series scopes for the same reason
+                // on the monitor sweep).
+                using var scope = scopes.CreateScope();
+                var scopedDb = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+                var scopedCommitter = scope.ServiceProvider.GetRequiredService<MigrationCommitter>();
+                var scopedSeries = await scopedDb.MigrationSeries
+                    .Include(s => s.Items).Include(s => s.Batch)
+                    .FirstAsync(s => s.Id == series.Id, ct);
+
                 try
                 {
-                    await committer.CommitAsync(series, ct);
+                    await scopedCommitter.CommitAsync(scopedSeries, ct);
+                    await scopedDb.SaveChangesAsync(ct);
                 }
                 catch (OperationCanceledException)
                 {
@@ -323,12 +375,20 @@ public sealed class MigrationService(
                 }
                 catch (Exception ex)
                 {
-                    series.Status = MigrationSeriesStatus.Failed;
-                    series.ConflictReason = $"Bulk commit failed: {ex.Message}";
-                    series.CommitItemsDone = null;
-                    series.CommitItemsTotal = null;
-                    logger.LogError(ex, "Migration bulk commit failed for series {SeriesId} ({Folder}).",
-                        series.Id, series.FolderName);
+                    LogCommitFailure(ex, series.Id, series.FolderName, "bulk");
+
+                    // scopedDb's tracker may still hold the same conflicting entries the failed
+                    // SaveChanges above did — clear it and write the failure directly so recording
+                    // it can't be defeated by the very state that caused it.
+                    scopedDb.ChangeTracker.Clear();
+                    await scopedDb.MigrationSeries
+                        .Where(s => s.Id == series.Id)
+                        .ExecuteUpdateAsync(s => s
+                            .SetProperty(x => x.Status, MigrationSeriesStatus.Failed)
+                            .SetProperty(x => x.ConflictReason, $"Bulk commit failed: {ex.Message}")
+                            .SetProperty(x => x.CommitItemsDone, (int?)null)
+                            .SetProperty(x => x.CommitItemsTotal, (int?)null),
+                            CancellationToken.None);
                 }
 
                 seriesDone++;
