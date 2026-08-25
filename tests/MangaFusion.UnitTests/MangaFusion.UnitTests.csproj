@@ -26,6 +26,7 @@
     <ProjectReference Include="..\..\src\MangaFusion.Infrastructure\MangaFusion.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\MangaFusion.Sources.MangaDex\MangaFusion.Sources.MangaDex.csproj" />
     <ProjectReference Include="..\..\src\MangaFusion.Sources.ComicVine\MangaFusion.Sources.ComicVine.csproj" />
+    <ProjectReference Include="..\..\src\MangaFusion.Sources.MangaUpdates\MangaFusion.Sources.MangaUpdates.csproj" />
     <ProjectReference Include="..\..\src\MangaFusion.Sources.Web\MangaFusion.Sources.Web.csproj" />
   </ItemGroup>
 

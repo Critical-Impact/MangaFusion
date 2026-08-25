@@ -56,7 +56,13 @@ internal sealed class GenreDto
 internal sealed class SeriesAuthorDto
 {
     public string Name { get; set; } = "";
-    public long AuthorId { get; set; }
+
+    /// <summary>This is null when MangaUpdates has no author record for the credit. The "url" field is
+    /// null in the same condition. About one third of series have one or more of these credits.
+    /// Keep this property nullable. System.Text.Json throws an exception if it reads a null into a
+    /// non-nullable value type. That exception stopped the full detail fetch for Solo Leveling, which
+    /// credits the artist "DISCIPLES (Redice Studio)".</summary>
+    public long? AuthorId { get; set; }
 
     /// <summary>"Author" (writer) or "Artist".</summary>
     public string Type { get; set; } = "";

@@ -107,7 +107,11 @@ internal static class ApiMapper
     private static List<AuthorRefDto> ToAuthorRefs(
         string sourceId, IReadOnlyList<string> names, IReadOnlyList<SourceAuthorRef> refs) =>
         refs.Count > 0
-            ? refs.Select(r => new AuthorRefDto(sourceId, r.Id, r.Name)).ToList()
+            // A ref with no source id becomes a local author, found by name. Show it in the "local"
+            // shape. This sends the author link to the name lookup. See LibraryQuery.AuthorSourceId.
+            ? refs.Select(r => r.Id is null
+                ? new AuthorRefDto(null, null, r.Name)
+                : new AuthorRefDto(sourceId, r.Id, r.Name)).ToList()
             : names.Select(n => new AuthorRefDto(null, null, n)).ToList();
 
     private static List<SeriesTagDto> ToTags(

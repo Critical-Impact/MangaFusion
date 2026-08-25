@@ -1,3 +1,4 @@
+using System.Globalization;
 using MangaFusion.Contracts.Models;
 using MangaFusion.Sources.MangaUpdates.Dtos;
 
@@ -20,8 +21,10 @@ internal static class MangaUpdatesMapper
             CoverUrl = dto.Image?.Url?.Original ?? dto.Image?.Url?.Thumb,
             Authors = authors.Select(a => a.Name).ToList(),
             Artists = artists.Select(a => a.Name).ToList(),
-            AuthorRefs = authors.Select(a => new SourceAuthorRef(a.AuthorId.ToString(), a.Name)).ToList(),
-            ArtistRefs = artists.Select(a => new SourceAuthorRef(a.AuthorId.ToString(), a.Name)).ToList(),
+            // A null author_id becomes a null ref id. Do not remove the credit. The resolver finds
+            // these authors by name, and the series keeps the credit.
+            AuthorRefs = authors.Select(ToAuthorRef).ToList(),
+            ArtistRefs = artists.Select(ToAuthorRef).ToList(),
             Tags = dto.Genres?.Select(g => g.Genre).Where(g => !string.IsNullOrWhiteSpace(g)).ToList() ?? [],
             ContentRating = ContentRating.Unknown, // MangaUpdates has no equivalent rating enum; left to the user to set.
             Status = MapStatus(dto.Status, dto.Completed),
@@ -31,6 +34,9 @@ internal static class MangaUpdatesMapper
             SiteUrl = dto.Url,
         };
     }
+
+    private static SourceAuthorRef ToAuthorRef(SeriesAuthorDto dto) =>
+        new(dto.AuthorId?.ToString(CultureInfo.InvariantCulture), dto.Name);
 
     /// <summary>Routes a MangaUpdates "type" to the library the series belongs to. "Novel" ⇒ light novel;
     /// the known comic-family types map explicitly to manga (not null) so that a future, unenumerated type
