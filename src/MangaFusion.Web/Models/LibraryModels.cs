@@ -12,7 +12,9 @@ public sealed record LibraryMembershipDto(string SourceId, string SourceSeriesId
 
 public sealed record FollowRequest(string[]? Languages, bool AutoDownload);
 
-public sealed record LibraryTitleDto(Guid Id, string Title);
+/// <summary><paramref name="MatchSourceSeriesId"/> is filled only when the caller asked for merge targets
+/// of one metadata source. It is this series' own id on that source, or null if it has none.</summary>
+public sealed record LibraryTitleDto(Guid Id, string Title, string? MatchSourceSeriesId = null);
 
 public sealed record LibrarySeriesDto(
     Guid Id,

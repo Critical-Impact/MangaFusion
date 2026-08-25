@@ -253,10 +253,12 @@ public sealed class ImportCommitter(
     {
         var existingId = importSeries.ExistingLibrarySeriesId!.Value;
 
-        // Re-checked here, not just where the target was chosen: the series could have been picked before a
-        // guard existed, or changed underneath us. Committing into the other library writes this batch's
-        // files under the wrong root, which is not something a later scan can detect or undo.
-        await MergeTarget.EnsureInLibraryAsync(db, existingId, importSeries.Batch.Kind, ct);
+        // Checked again here, and not only where the user chose the target. The user could have chosen the
+        // series before a guard existed, or the series could have changed since then. A commit into the
+        // other library writes this batch's files under the wrong root. No later scan can find or undo that.
+        await MergeTarget.EnsureEligibleAsync(
+            db, existingId, importSeries.Batch.Kind, ImportMatcher.SourceFor(importSeries.Batch.Kind),
+            importSeries.MatchedSourceSeriesId, ct);
 
         if (importSeries.MatchedSourceSeriesId is { } sourceSeriesId)
         {

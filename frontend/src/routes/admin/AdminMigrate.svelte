@@ -21,6 +21,7 @@
       type MigrationBatchDetail,
       type MigrationSeriesDetail,
       type MigrationItemDetail,
+      type LibraryTitle,
       type Series, clearMigrationConflict,
   } from '../../lib/api'
   import { notify } from '../../lib/notify'
@@ -55,7 +56,7 @@
   let matchQuery = $state<Record<string, string>>({})
   let matchResults = $state<Record<string, Series[]>>({})
   let mergeQuery = $state<Record<string, string>>({})
-  let libraryTitles = $state<{ id: string; title: string }[]>([])
+  let libraryTitles = $state<LibraryTitle[]>([])
 
   // Full MangaDex series detail (for its site URL), keyed by sourceSeriesId — migration always matches
   // against MangaDex, so unlike AdminImport there's no per-batch source to look up. Loaded lazily (see
@@ -105,6 +106,7 @@
   async function openBatch(id: string) {
     try {
       batch = await getMigrationBatch(id)
+      await loadLibraryTitles()
       if (isBusyStatus(batch.status)) watch(id)
     } catch (err) {
       notify.error(msgOf(err))
@@ -155,13 +157,34 @@
     }
   }
 
+  // Migration always matches against MangaDex, so that is the merge source: the server keeps only the
+  // series this batch can merge into, and removes the ones from another metadata source. Loaded with the
+  // batch, not when the dropdown opens, because the trigger shows the chosen target's title.
+  let libraryTitlesLoaded = $state(false)
   async function loadLibraryTitles() {
-    if (libraryTitles.length) return
+    if (libraryTitlesLoaded) return
     try {
-      libraryTitles = await getLibraryTitles()
+      libraryTitles = await getLibraryTitles(undefined, 'mangadex')
+      libraryTitlesLoaded = true
     } catch {
       /* merge-target picker is best-effort */
     }
+  }
+
+  // The server removed the series from other metadata sources. This removes the ones linked to a
+  // different MangaDex id, which is per-row data the one shared list cannot carry.
+  function mergeOptions(s: MigrationSeriesDetail): LibraryTitle[] {
+    return libraryTitles.filter(
+      (t) => !t.matchSourceSeriesId || t.matchSourceSeriesId === s.matchedSourceSeriesId,
+    )
+  }
+
+  // A target chosen before these rules existed can still be on the series, and it is no longer in the
+  // list. Say so: the commit refuses it, and the user must clear it.
+  function mergeLabel(s: MigrationSeriesDetail): string {
+    if (!s.existingLibrarySeriesId) return '— create new series —'
+    const known = mergeOptions(s).find((t) => t.id === s.existingLibrarySeriesId)
+    return known?.title ?? (libraryTitlesLoaded ? 'Chosen series (no longer eligible)' : '…')
   }
 
   async function loadMatchedDetail(sourceSeriesId: string) {
@@ -537,11 +560,11 @@
                       onValueChange={(v) => act(s.id + ':merge', () => setMigrationMergeTarget(s.id, v || null))}
                     >
                       <SelectTrigger>
-                        {libraryTitles.find((t) => t.id === s.existingLibrarySeriesId)?.title ?? '— create new series —'}
+                        {mergeLabel(s)}
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="" label="— create new series —">— create new series —</SelectItem>
-                        {#each libraryTitles as t (t.id)}<SelectItem value={t.id} label={t.title}>{t.title}</SelectItem>{/each}
+                        {#each mergeOptions(s) as t (t.id)}<SelectItem value={t.id} label={t.title}>{t.title}</SelectItem>{/each}
                       </SelectContent>
                     </Select>
                   </label>

@@ -220,7 +220,9 @@ public sealed class ImportService(
         EnsureEditable(importSeries);
         if (existingLibrarySeriesId is { } id)
         {
-            await MergeTarget.EnsureInLibraryAsync(db, id, importSeries.Batch.Kind, ct);
+            await MergeTarget.EnsureEligibleAsync(
+                db, id, importSeries.Batch.Kind, ImportMatcher.SourceFor(importSeries.Batch.Kind),
+                importSeries.MatchedSourceSeriesId, ct);
         }
 
         importSeries.ExistingLibrarySeriesId = existingLibrarySeriesId;
@@ -490,9 +492,11 @@ public sealed class ImportService(
 
     // --- internals -------------------------------------------------------------------------------
 
-    /// <summary>Auto-suggests merging into an existing library series with the same title that isn't
-    /// already linked to this MangaUpdates id — e.g. a hand-created local series. Never overwrites its
-    /// metadata; only adds chapters/files on commit. The user can clear this in review.</summary>
+    /// <summary>Suggests a merge into an existing library series with the same title, for example a
+    /// hand-created local series. The series must not be linked to this MangaUpdates id already, and it
+    /// must obey the source rules in <see cref="MergeTarget"/>. A merge never overwrites the target's
+    /// metadata. It only adds chapters and files on commit. The user can clear the suggestion in
+    /// review.</summary>
     private async Task DetectMergeTargetAsync(ImportSeries importSeries, CancellationToken ct)
     {
         if (importSeries.MatchedSourceSeriesId is null)
@@ -520,7 +524,8 @@ public sealed class ImportService(
             .Distinct()
             .ToList();
 
-        var titleMatch = await MergeTarget.FindByTitleAsync(db, importSeries.Batch.Kind, candidates, ct);
+        var titleMatch = await MergeTarget.FindByTitleAsync(
+            db, importSeries.Batch.Kind, candidates, matchSourceId, importSeries.MatchedSourceSeriesId, ct);
 
         importSeries.ExistingLibrarySeriesId = titleMatch?.Id;
     }

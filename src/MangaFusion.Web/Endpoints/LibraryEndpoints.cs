@@ -362,9 +362,12 @@ public static class LibraryEndpoints
         ILibraryService library, string? kind, CancellationToken ct) =>
         Results.Ok(await library.GetTagCatalogAsync(MediaKindQuery.Parse(kind), ct));
 
-    private static async Task<IResult> GetTitles(ILibraryService library, string? kind, CancellationToken ct) =>
-        Results.Ok((await library.GetLibraryTitlesAsync(MediaKindQuery.ParseOptional(kind), ct))
-            .Select(s => new LibraryTitleDto(s.Id, s.Title)));
+    // mergeSource is the metadata source an import/migration batch matches against. The merge-target
+    // picker sends it to get only the series that batch can merge into.
+    private static async Task<IResult> GetTitles(
+        ILibraryService library, string? kind, string? mergeSource, CancellationToken ct) =>
+        Results.Ok((await library.GetLibraryTitlesAsync(MediaKindQuery.ParseOptional(kind), mergeSource, ct))
+            .Select(s => new LibraryTitleDto(s.Id, s.Title, s.MatchSourceSeriesId)));
 
     // Batch membership check for the browse grid: which of these source series are already in the
     // library, and under which library id (so the card can link straight there).

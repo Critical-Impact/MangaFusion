@@ -72,9 +72,15 @@ public interface ILibraryService
     /// <summary>Every series' id + title, unpaginated — for id-to-title lookups (e.g. the activity feed)
     /// and the import merge-target picker, not for the browse UI which goes through
     /// <see cref="QueryLibraryAsync"/>. Pass a <paramref name="kind"/> to scope to one library (the merge
-    /// picker must, so a manga import can't offer a light-novel series as a merge target); null returns all.</summary>
-    Task<IReadOnlyList<(Guid Id, string Title)>> GetLibraryTitlesAsync(
-        MediaKind? kind = null, CancellationToken ct = default);
+    /// picker must, so a manga import can't offer a light-novel series as a merge target); null returns all.
+    ///
+    /// <paramref name="mergeTargetSourceId"/> is the metadata source a batch is matched against. Give it
+    /// to get only the series that batch can merge into. Series from a different metadata source are then
+    /// removed, because a shared title alone does not show that two series are the same work.
+    /// <c>MatchSourceSeriesId</c> is the target's own id on that source, or null if it has none. The caller
+    /// removes the rows whose id is not the one it matched.</summary>
+    Task<IReadOnlyList<(Guid Id, string Title, string? MatchSourceSeriesId)>> GetLibraryTitlesAsync(
+        MediaKind? kind = null, string? mergeTargetSourceId = null, CancellationToken ct = default);
 
     /// <summary>Which of the given source refs are already in the library, mapped to their library series
     /// id — lets the browse grid mark already-added series (and link straight to them) without a query per

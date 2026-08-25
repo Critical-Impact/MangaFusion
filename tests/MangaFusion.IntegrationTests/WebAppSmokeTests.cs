@@ -1,6 +1,8 @@
 using System.Net;
 using System.Net.Http.Json;
+using MangaFusion.Domain.Library;
 using MangaFusion.Infrastructure.Monitoring;
+using MangaFusion.Infrastructure.Persistence;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace MangaFusion.IntegrationTests;
@@ -138,6 +140,53 @@ public class WebAppSmokeTests(MangaFusionAppFactory factory) : IClassFixture<Man
     }
 
     private sealed record LocalSeriesRow(Guid Id, string Title);
+
+    /// <summary>The merge-target picker's own query. With <c>mergeSource</c> the list keeps only the series
+    /// a batch matched against that source can merge into, and reports each one's id on it. A series from
+    /// another metadata source is removed, and a local one is kept.</summary>
+    [Fact]
+    public async Task Library_titles_filters_merge_targets_by_source()
+    {
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            db.Series.AddRange(
+                SeedSeries("MT local only", "local", "aaa"),
+                SeedSeries("MT from mangadex", "mangadex", "bbb"),
+                SeedSeries("MT from mangaupdates", "mangaupdates", "ccc"));
+            await db.SaveChangesAsync();
+        }
+
+        var admin = factory.CreateClient();
+        (await admin.PostAsJsonAsync("/api/auth/login?useCookies=true",
+            new { email = "admin@mangafusion.local", password = "ChangeMe!123" })).EnsureSuccessStatusCode();
+
+        var rows = await admin.GetFromJsonAsync<TitleRow[]>(
+            "/api/library/series/titles?kind=Manga&mergeSource=mangaupdates");
+
+        Assert.DoesNotContain(rows!, r => r.Title == "MT from mangadex");
+        Assert.Contains(rows!, r => r.Title == "MT local only" && r.MatchSourceSeriesId == null);
+        Assert.Contains(rows!, r => r.Title == "MT from mangaupdates" && r.MatchSourceSeriesId == "ccc");
+
+        // Without mergeSource the list is unfiltered — it still serves plain id-to-title lookups.
+        var all = await admin.GetFromJsonAsync<TitleRow[]>("/api/library/series/titles?kind=Manga");
+        Assert.Contains(all!, r => r.Title == "MT from mangadex");
+    }
+
+    private static Series SeedSeries(string title, string sourceId, string sourceSeriesId)
+    {
+        var series = new Series { Title = title, Kind = MediaKind.Manga };
+        series.SourceLinks.Add(new SeriesSourceLink
+        {
+            SourceId = sourceId,
+            SourceSeriesId = sourceSeriesId,
+            Kind = MediaKind.Manga,
+            IsMetadataPrimary = sourceId != "local",
+        });
+        return series;
+    }
+
+    private sealed record TitleRow(Guid Id, string Title, string? MatchSourceSeriesId);
 
     [Fact]
     public async Task Reader_endpoints_require_authentication()

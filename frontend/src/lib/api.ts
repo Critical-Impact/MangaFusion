@@ -510,8 +510,20 @@ export function getLibraryTags(group?: string): Promise<TagInfo[]> {
 export const getLibraryTagCatalog = () =>
   getJson<TagInfo[]>(`/api/library/tags/catalog?kind=${currentKind()}`)
 
-export const getLibraryTitles = () =>
-  getJson<{ id: string; title: string }[]>(`/api/library/series/titles?kind=${currentKind()}`)
+export interface LibraryTitle {
+  id: string
+  title: string
+  /** This series' own id on the merge source, or null. Only filled when mergeSource was given. */
+  matchSourceSeriesId: string | null
+}
+
+/** Pass `mergeSource` (a batch's match source) to get only the series that batch can merge into: the
+ *  server removes every series that came from a different metadata source. */
+export const getLibraryTitles = (kind?: string, mergeSource?: string) => {
+  const params = new URLSearchParams({ kind: kind ?? currentKind() })
+  if (mergeSource) params.set('mergeSource', mergeSource)
+  return getJson<LibraryTitle[]>(`/api/library/series/titles?${params}`)
+}
 
 export const getLibrarySeries = (id: string) =>
   getJson<LibrarySeriesDetail>(`/api/library/series/${id}`)

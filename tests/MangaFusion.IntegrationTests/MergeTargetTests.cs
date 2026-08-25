@@ -10,12 +10,19 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 namespace MangaFusion.IntegrationTests;
 
-/// <summary>Manga and comics share a database but not a root directory, and a series' files are written
-/// under its own kind's root. So merging a manga batch into a comic series (or vice versa) doesn't fail —
-/// it silently writes the chapters into the wrong library, where that library's UI will never look for
-/// them. Same-title collisions across the two libraries are ordinary (an adaptation shares its source's
-/// title), which is exactly when a merge target gets auto-suggested.</summary>
-public class MergeTargetKindTests : IDisposable
+/// <summary>The two rules a merge target must obey. See <c>MergeTarget</c>.
+///
+/// Rule 1, the library. Manga and comics share a database but not a root directory, and a series' files
+/// are written under its own kind's root. A manga batch that merges into a comic series does not fail. It
+/// writes the chapters into the wrong library, where that library's UI never looks for them.
+///
+/// Rule 2, the source. A batch is matched against one metadata source. A same-titled series from another
+/// source, or one linked to a different id on the same source, is not shown to be the same work.
+///
+/// Both rules are reachable because a shared title is ordinary: an adaptation keeps the title of its
+/// source, and different works do share a title. That is exactly when a merge target is
+/// auto-suggested.</summary>
+public class MergeTargetTests : IDisposable
 {
     private readonly string _dbPath = Path.Combine(Path.GetTempPath(), $"mf-mtk-{Guid.NewGuid():N}.db");
     private readonly string _root = Path.Combine(Path.GetTempPath(), $"mf-mtk-lib-{Guid.NewGuid():N}");
@@ -27,7 +34,7 @@ public class MergeTargetKindTests : IDisposable
 
     private const string Folder = "Berserk";
 
-    public MergeTargetKindTests()
+    public MergeTargetTests()
     {
         _config = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
@@ -147,6 +154,116 @@ public class MergeTargetKindTests : IDisposable
         Assert.Equal(manga.Id, seriesId);
         Assert.Equal(1, await db.Chapters.CountAsync(c => c.SeriesId == manga.Id));
         Assert.False(File.Exists(InboxFile("v1.cbz"))); // consumed
+    }
+
+    /// <summary>The reported case: a MangaDex series called "Berserk" is in the library, and a
+    /// MangaUpdates-matched import of a different work with the same title points at it. Nothing links the
+    /// two, so the commit must refuse it and leave the inbox file to retry with.</summary>
+    [Fact]
+    public async Task Committing_an_import_into_a_series_from_another_source_is_refused()
+    {
+        StageCbz("v1.cbz");
+
+        await using var db = NewContext();
+        await db.Database.MigrateAsync();
+
+        var fromMangaDex = NewSeries("Berserk", ("mangadex", "0e4a1b2c"));
+        db.Series.Add(fromMangaDex);
+        var loaded = await StageMergeAsync(db, fromMangaDex.Id, matchedSourceSeriesId: "51239621230");
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => NewCommitter(db).CommitAsync(loaded, CancellationToken.None));
+
+        Assert.Contains("mangadex", ex.Message);
+        Assert.Equal(0, await db.Chapters.CountAsync());
+        Assert.True(File.Exists(InboxFile("v1.cbz")));
+    }
+
+    /// <summary>A target already linked to a different id on the batch's own source is a different work,
+    /// which is the strongest evidence available. Refuse it.</summary>
+    [Fact]
+    public async Task Committing_an_import_into_a_different_id_on_the_same_source_is_refused()
+    {
+        StageCbz("v1.cbz");
+
+        await using var db = NewContext();
+        await db.Database.MigrateAsync();
+
+        var otherWork = NewSeries("Berserk", ("mangaupdates", "99999999999"));
+        db.Series.Add(otherWork);
+        var loaded = await StageMergeAsync(db, otherWork.Id, matchedSourceSeriesId: "51239621230");
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => NewCommitter(db).CommitAsync(loaded, CancellationToken.None));
+
+        Assert.Contains("different", ex.Message);
+        Assert.Equal(0, await db.Chapters.CountAsync());
+        Assert.True(File.Exists(InboxFile("v1.cbz")));
+    }
+
+    /// <summary>The control for rule 2: a hand-created local series and a series already on the matched
+    /// MangaUpdates id both stay eligible, so the guard rejects on the source and not on merges as
+    /// such.</summary>
+    [Theory]
+    [InlineData("local", "8f2c1d")]
+    [InlineData("mangaupdates", "51239621230")]
+    public async Task Committing_into_a_local_or_same_id_series_still_works(string sourceId, string sourceSeriesId)
+    {
+        StageCbz("v1.cbz");
+
+        await using var db = NewContext();
+        await db.Database.MigrateAsync();
+
+        var target = NewSeries("Berserk", (sourceId, sourceSeriesId));
+        db.Series.Add(target);
+        var loaded = await StageMergeAsync(db, target.Id, matchedSourceSeriesId: "51239621230");
+
+        var seriesId = await NewCommitter(db).CommitAsync(loaded, CancellationToken.None);
+
+        Assert.Equal(target.Id, seriesId);
+        Assert.Equal(1, await db.Chapters.CountAsync(c => c.SeriesId == target.Id));
+        Assert.False(File.Exists(InboxFile("v1.cbz"))); // consumed
+    }
+
+    private static Series NewSeries(string title, params (string SourceId, string SourceSeriesId)[] links)
+    {
+        var series = new Series { Title = title, Kind = MediaKind.Manga };
+        foreach (var (sourceId, sourceSeriesId) in links)
+        {
+            series.SourceLinks.Add(new SeriesSourceLink
+            {
+                SourceId = sourceId,
+                SourceSeriesId = sourceSeriesId,
+                Kind = MediaKind.Manga,
+                IsMetadataPrimary = sourceId != "local",
+            });
+        }
+
+        return series;
+    }
+
+    /// <summary>One manga import series, one CBZ, pointed at <paramref name="mergeTargetId"/>.</summary>
+    private static async Task<ImportSeries> StageMergeAsync(
+        AppDbContext db, Guid mergeTargetId, string matchedSourceSeriesId)
+    {
+        var batch = new ImportBatch { Kind = MediaKind.Manga, Status = ImportBatchStatus.Done };
+        var importSeries = new ImportSeries
+        {
+            Batch = batch,
+            GroupTitle = "Berserk",
+            MatchedSourceSeriesId = matchedSourceSeriesId,
+            ExistingLibrarySeriesId = mergeTargetId,
+        };
+        importSeries.Items.Add(new ImportItem
+        {
+            FolderName = Folder, FileName = "v1.cbz", Format = ImportSourceFormat.Cbz, Number = "1", PageCount = 1,
+        });
+        db.ImportBatches.Add(batch);
+        db.ImportSeries.Add(importSeries);
+        await db.SaveChangesAsync();
+
+        return await db.ImportSeries.Include(s => s.Items).Include(s => s.Batch)
+            .FirstAsync(s => s.Id == importSeries.Id);
     }
 
     private sealed class NullNotifier : ILibraryNotifier

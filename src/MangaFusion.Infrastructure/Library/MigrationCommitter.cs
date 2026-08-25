@@ -49,10 +49,11 @@ public sealed class MigrationCommitter(
 
         if (isMerge)
         {
-            // Re-checked at commit, not just where the target was chosen — merging into the other library
-            // writes this batch's files under the wrong root, which no later scan can detect or undo.
-            await MergeTarget.EnsureInLibraryAsync(
-                db, migrationSeries.ExistingLibrarySeriesId!.Value, migrationSeries.Batch.Kind, ct);
+            // Checked again at commit, and not only where the user chose the target. A merge into the other
+            // library writes this batch's files under the wrong root. No later scan can find or undo that.
+            await MergeTarget.EnsureEligibleAsync(
+                db, migrationSeries.ExistingLibrarySeriesId!.Value, migrationSeries.Batch.Kind,
+                MigrationMatcher.SourceId, migrationSeries.MatchedSourceSeriesId, ct);
         }
 
         var series = isMerge

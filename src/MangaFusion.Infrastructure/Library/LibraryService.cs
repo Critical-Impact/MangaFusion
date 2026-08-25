@@ -253,13 +253,31 @@ public sealed class LibraryService(
         await db.SaveChangesAsync(ct);
     }
 
-    public async Task<IReadOnlyList<(Guid Id, string Title)>> GetLibraryTitlesAsync(
-        MediaKind? kind = null, CancellationToken ct = default) =>
-        (await db.Series
-                .Where(s => kind == null || s.Kind == kind)
-                .Select(s => new { s.Id, s.Title }).ToListAsync(ct))
-            .Select(s => (s.Id, s.Title))
+    public async Task<IReadOnlyList<(Guid Id, string Title, string? MatchSourceSeriesId)>> GetLibraryTitlesAsync(
+        MediaKind? kind = null, string? mergeTargetSourceId = null, CancellationToken ct = default)
+    {
+        var series = db.Series.Where(s => kind == null || s.Kind == kind);
+        if (mergeTargetSourceId is { } mergeSource)
+        {
+            // The per-row id check stays with the caller: one list serves every series in a batch, and each
+            // of those has matched a different id on this source.
+            series = MergeTarget.Eligible(series, mergeSource, matchedSourceSeriesId: null);
+        }
+
+        return (await series
+                .Select(s => new
+                {
+                    s.Id,
+                    s.Title,
+                    MatchSourceSeriesId = s.SourceLinks
+                        .Where(l => l.SourceId == mergeTargetSourceId)
+                        .Select(l => l.SourceSeriesId)
+                        .FirstOrDefault(),
+                })
+                .ToListAsync(ct))
+            .Select(s => (s.Id, s.Title, s.MatchSourceSeriesId))
             .ToList();
+    }
 
     public async Task<IReadOnlyList<(string SourceId, string SourceSeriesId, Guid LibraryId)>> ResolveLibraryLinksAsync(
         IReadOnlyCollection<(string SourceId, string SourceSeriesId)> refs, CancellationToken ct = default)
