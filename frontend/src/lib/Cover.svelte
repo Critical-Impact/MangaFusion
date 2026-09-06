@@ -1,12 +1,20 @@
 <script lang="ts">
   import type { Snippet } from 'svelte'
 
+  // `dim` de-emphasises the artwork (not the overlay, which keeps its badges at full contrast) so a
+  // card can read as "already handled" at a glance. Hovering restores it — inside a `group` root, as
+  // PosterCard provides — so the full cover is still one pointer away.
   let {
     src,
     alt = '',
     radius = 'var(--r-md)',
+    dim = false,
     overlay,
-  }: { src?: string | null; alt?: string; radius?: string; overlay?: Snippet } = $props()
+  }: { src?: string | null; alt?: string; radius?: string; dim?: boolean; overlay?: Snippet } = $props()
+
+  const artClass = $derived(
+    `h-full w-full transition-[filter,opacity] duration-150 ${dim ? 'opacity-50 grayscale group-hover:opacity-100 group-hover:grayscale-0' : ''}`,
+  )
 </script>
 
 <div
@@ -14,9 +22,9 @@
   style={`--cover-radius:${radius}`}
 >
   {#if src}
-    <img {src} {alt} loading="lazy" draggable="false" class="block h-full w-full object-cover" />
+    <img {src} {alt} loading="lazy" draggable="false" class={`block object-cover ${artClass}`} />
   {:else}
-    <div class="grid h-full place-items-center text-[0.8rem] text-text-faint">No cover</div>
+    <div class={`grid place-items-center text-[0.8rem] text-text-faint ${artClass}`}>No cover</div>
   {/if}
   {#if overlay}
     <div class="pointer-events-none absolute inset-0">{@render overlay()}</div>

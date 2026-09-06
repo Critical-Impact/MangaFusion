@@ -10,6 +10,7 @@
     href,
     onclick,
     radius = 'var(--r-md)',
+    dim = false,
     overlay,
   }: {
     title: string
@@ -18,6 +19,7 @@
     href?: string
     onclick?: () => void
     radius?: string
+    dim?: boolean
     overlay?: Snippet
   } = $props()
 
@@ -26,7 +28,7 @@
 
 {#if href}
   <a class={cardClass} {href} use:link {title}>
-    <Cover src={coverUrl} alt={title} {radius} {overlay} />
+    <Cover src={coverUrl} alt={title} {radius} {dim} {overlay} />
     <span class="block max-w-full truncate px-[var(--poster-pad)] text-[0.9rem] font-semibold">{title}</span>
     {#if subtitle}
       <span class="block max-w-full truncate px-[var(--poster-pad)] text-[0.78rem] text-text-mute">{subtitle}</span>
@@ -49,7 +51,7 @@
       }
     }}
   >
-    <Cover src={coverUrl} alt={title} {radius} {overlay} />
+    <Cover src={coverUrl} alt={title} {radius} {dim} {overlay} />
     <span class="block max-w-full truncate px-[var(--poster-pad)] text-[0.9rem] font-semibold">{title}</span>
     {#if subtitle}
       <span class="block max-w-full truncate px-[var(--poster-pad)] text-[0.78rem] text-text-mute">{subtitle}</span>

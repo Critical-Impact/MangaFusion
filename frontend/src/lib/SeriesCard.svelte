@@ -77,6 +77,7 @@
   title={series.title}
   subtitle={`${series.status}${series.year ? ` · ${series.year}` : ''}`}
   coverUrl={series.coverUrl}
+  dim={inLibrary}
   onclick={open}
 >
   {#snippet overlay()}
