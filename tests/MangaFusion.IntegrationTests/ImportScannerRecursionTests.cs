@@ -76,6 +76,20 @@ public class ImportScannerRecursionTests : IDisposable
         Assert.Equal(0, file.PageCount); // prose: whole-volume chapter, no page count
     }
 
+    [Theory]
+    [InlineData("Other Name 01", "1")]
+    [InlineData("Other Name v02", "2")]
+    [InlineData("Other Name - Volume 3", "3")]
+    public async Task ScanInbox_reads_the_volume_off_each_light_novel_file(string fileName, string expectedVolume)
+    {
+        await WriteProseEpubAsync(Path.Combine(_inbox, "Some Series", $"{fileName}.epub"));
+
+        var file = Assert.Single(Assert.Single(_scanner.ScanInbox(_inbox, MediaKind.LightNovel)).Files);
+
+        Assert.Equal(expectedVolume, file.ParsedVolume);
+        Assert.Null(file.ParsedNumber);
+    }
+
     /// <summary>A comic release is a folder of numbered issues, not a volume. The issue number has to come
     /// off each file — the folder name carries none — so that a comic import ends up with real chapter
     /// numbers rather than a pile of unnumbered whole-volume artifacts.</summary>
@@ -86,12 +100,105 @@ public class ImportScannerRecursionTests : IDisposable
         await WriteCbzAsync(Path.Combine(releaseDir, "100 Bullets #017"), pages: 2);
         await WriteCbzAsync(Path.Combine(releaseDir, "100 Bullets #018"), pages: 2);
 
-        var groups = _scanner.ScanInbox(_inbox, MediaKind.Manga);
+        var groups = _scanner.ScanInbox(_inbox, MediaKind.Comic);
 
         var group = Assert.Single(groups);
         Assert.Equal("100 Bullets", group.GroupTitle); // the "100" is the title, not an issue number
         Assert.Equal(["17", "18"], group.Files.Select(f => f.ParsedNumber));
         Assert.All(group.Files, f => Assert.Null(f.ParsedVolume));
+    }
+
+    /// <summary>The file names inside a manga release folder don't have to match the folder's name — the
+    /// volume comes off whatever numbering convention each file uses.</summary>
+    [Theory]
+    [InlineData("Other Name 001", "1")]
+    [InlineData("Other Name 01", "1")]
+    [InlineData("Other Name v01", "1")]
+    [InlineData("Other Name Volume 1", "1")]
+    [InlineData("Volume 1", "1")]
+    [InlineData("Other_Name_v03_(Digital)", "3")]
+    [InlineData("Other Name 012 (2021) [Group]", "12")]
+    public async Task ScanInbox_reads_the_volume_off_each_manga_file(string fileName, string expectedVolume)
+    {
+        await WriteCbzAsync(Path.Combine(_inbox, "Some Series", $"{fileName}.cbz"), pages: 2);
+
+        var file = Assert.Single(Assert.Single(_scanner.ScanInbox(_inbox, MediaKind.Manga)).Files);
+
+        Assert.Equal(expectedVolume, file.ParsedVolume);
+        Assert.Null(file.ParsedNumber);
+    }
+
+    [Theory]
+    [InlineData("Other Name Ch.1", "1")]
+    [InlineData("Other Name Ch 007", "7")]
+    [InlineData("Other Name Chapter 12.5", "12.5")]
+    public async Task ScanInbox_reads_an_explicit_chapter_marker_as_the_number_not_the_volume(
+        string fileName, string expectedNumber)
+    {
+        await WriteCbzAsync(Path.Combine(_inbox, "Some Series", $"{fileName}.cbz"), pages: 2);
+
+        var file = Assert.Single(Assert.Single(_scanner.ScanInbox(_inbox, MediaKind.Manga)).Files);
+
+        Assert.Equal(expectedNumber, file.ParsedNumber);
+        Assert.Null(file.ParsedVolume);
+    }
+
+    [Fact]
+    public async Task ScanInbox_keeps_both_volume_and_chapter_when_a_manga_file_has_both()
+    {
+        await WriteCbzAsync(Path.Combine(_inbox, "Some Series", "Some_Series_v02_ch010.cbz"), pages: 2);
+
+        var file = Assert.Single(Assert.Single(_scanner.ScanInbox(_inbox, MediaKind.Manga)).Files);
+
+        Assert.Equal("2", file.ParsedVolume);
+        Assert.Equal("10", file.ParsedNumber);
+    }
+
+    /// <summary>A chapter range is a multi-chapter file — guessing its first chapter would be wrong.</summary>
+    [Fact]
+    public async Task ScanInbox_declines_to_number_a_chapter_range()
+    {
+        await WriteCbzAsync(Path.Combine(_inbox, "Some Series", "Some Series Ch.001-005.cbz"), pages: 2);
+
+        var file = Assert.Single(Assert.Single(_scanner.ScanInbox(_inbox, MediaKind.Manga)).Files);
+
+        Assert.Null(file.ParsedNumber);
+        Assert.Null(file.ParsedVolume);
+    }
+
+    /// <summary>A trailing number that's part of the series' own name must not become a volume.</summary>
+    [Fact]
+    public async Task ScanInbox_does_not_read_a_number_in_the_series_title_as_a_volume()
+    {
+        await WriteCbzAsync(Path.Combine(_inbox, "Mob Psycho 100", "Mob.Psycho.100.cbz"), pages: 2);
+
+        var file = Assert.Single(Assert.Single(_scanner.ScanInbox(_inbox, MediaKind.Manga)).Files);
+
+        Assert.Null(file.ParsedVolume);
+    }
+
+    /// <summary>A bare number is the weakest volume signal — an explicit volume on the release folder wins,
+    /// since numbered files inside a volume folder are more likely chapters than volumes.</summary>
+    [Fact]
+    public async Task ScanInbox_prefers_the_folder_s_explicit_volume_over_a_bare_file_number()
+    {
+        await WriteCbzAsync(Path.Combine(_inbox, "Some Series Vol.02", "Some Series 003.cbz"), pages: 2);
+
+        var file = Assert.Single(Assert.Single(_scanner.ScanInbox(_inbox, MediaKind.Manga)).Files);
+
+        Assert.Equal("2", file.ParsedVolume);
+    }
+
+    [Fact]
+    public async Task ScanInbox_groups_per_chapter_manga_files_into_one_series()
+    {
+        await WriteCbzAsync(Path.Combine(_inbox, "Some Series Ch.1.cbz"), pages: 2);
+        await WriteCbzAsync(Path.Combine(_inbox, "Some Series Ch.2.cbz"), pages: 2);
+
+        var group = Assert.Single(_scanner.ScanInbox(_inbox, MediaKind.Manga));
+
+        Assert.Equal("Some Series", group.GroupTitle);
+        Assert.Equal(["1", "2"], group.Files.Select(f => f.ParsedNumber));
     }
 
     [Fact]

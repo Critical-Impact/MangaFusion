@@ -11,9 +11,9 @@ namespace MangaFusion.Infrastructure.Library;
 public sealed record ScannedImportFile(
     string FolderName, string FileName, string FullPath, ChapterSourceKind Kind,
     string ParsedTitle, string? ParsedVolume, int PageCount, long SizeBytes,
-    /// <summary>The issue/chapter number parsed from the name ("100 Bullets #017" → "17"), when the name
-    /// carries one. Comics are distributed one file per <em>issue</em>, where manga releases are one file
-    /// per <em>volume</em> — so this is what a comic import fills its chapter number from.</summary>
+    /// <summary>The chapter number parsed from the name, when it carries one: a comic's issue
+    /// ("100 Bullets #017" → "17"), or a manga's explicit chapter marker ("Name Ch.5" → "5"). A manga file
+    /// without one is a whole volume, since manga releases are usually one file per <em>volume</em>.</summary>
     string? ParsedNumber = null);
 
 /// <summary>Inbox folders whose parsed titles normalize to the same value, grouped into one candidate
@@ -32,9 +32,17 @@ public sealed class ImportScanner(ChapterFileImporter chapterImporter)
     };
 
     // Matches "Vol.3"/"Vol 3"/"Volume 3" (the original scene-release convention) as well as the
-    // shorter "v03"/"V3" form common on individual volume-scan filenames.
+    // shorter "v03"/"V3" form common on individual volume-scan filenames. Letter lookarounds rather than
+    // \b so an underscore-separated "Name_v01_ch003" still matches.
     private static readonly Regex VolumePattern =
-        new(@"\bv(?:ol(?:ume)?)?\.?\s*0*(\d+)\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        new(@"(?<![a-z])v(?:ol(?:ume)?)?\.?\s*0*(\d+)(?![a-z])", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    // "Ch.1"/"Ch 001"/"Chapter 12.5" — an explicit manga chapter marker. A range ("Ch.1-5") is a
+    // multi-chapter file with no single number, so ParseChapter declines it rather than guessing its first
+    // chapter — but it still counts as a chapter marker, so the file isn't mistaken for a volume.
+    private static readonly Regex ChapterPattern = new(
+        @"(?<![a-z])ch(?:ap(?:ter)?)?\.?\s*0*(\d+(?:\.\d+)?)(\s*[-–~]\s*\d+(?:\.\d+)?)?",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     // "#017" — the unambiguous comic issue marker, and the only one safe to trust anywhere in the name.
     private static readonly Regex HashIssuePattern =
@@ -105,6 +113,7 @@ public sealed class ImportScanner(ChapterFileImporter chapterImporter)
     {
         var folderName = Path.GetFileName(dir);
         var (title, folderVolume, folderIssue) = ParseFolderName(folderName);
+        var folderNumber = ParseNumber(folderName, folderIssue, kind);
         var results = new List<ScannedImportFile>();
 
         foreach (var file in Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories)
@@ -116,10 +125,10 @@ public sealed class ImportScanner(ChapterFileImporter chapterImporter)
             }
 
             var stem = Path.GetFileNameWithoutExtension(file);
-            var volume = ParseVolume(stem) ?? folderVolume;
+            var (volume, number) = ParseItemNumbers(stem, title, kind, folderVolume, folderNumber);
             results.Add(new ScannedImportFile(
                 folderName, Path.GetRelativePath(dir, file), file, sourceKind, title, volume, pages,
-                new FileInfo(file).Length, ParseIssue(stem) ?? folderIssue));
+                new FileInfo(file).Length, number));
         }
 
         if (results.Count > 0)
@@ -142,10 +151,10 @@ public sealed class ImportScanner(ChapterFileImporter chapterImporter)
             var size = Directory.EnumerateFiles(candidate).Sum(f => new FileInfo(f).Length);
             var relative = candidate == dir ? "" : Path.GetRelativePath(dir, candidate);
             var name = Path.GetFileName(candidate);
-            var volume = ParseVolume(name) ?? folderVolume;
+            var (volume, number) = ParseItemNumbers(name, title, kind, folderVolume, folderNumber);
             results.Add(new ScannedImportFile(
                 folderName, relative, candidate, ChapterSourceKind.Folder, title, volume, folderPages, size,
-                ParseIssue(name) ?? folderIssue));
+                number));
         }
 
         return results;
@@ -192,13 +201,57 @@ public sealed class ImportScanner(ChapterFileImporter chapterImporter)
         var (title, volume, issue) = ParseFolderName(stem);
         return new ScannedImportFile(
             "", Path.GetFileName(file), file, sourceKind, title, volume, pages,
-            new FileInfo(file).Length, kind == MediaKind.Comic ? issue : null);
+            new FileInfo(file).Length, ParseNumber(stem, issue, kind));
+    }
+
+    /// <summary>The chapter number a release name carries for this library: a comic's issue number, a
+    /// manga's explicit "Ch." marker, and nothing for light novels (always whole-volume imports).</summary>
+    private static string? ParseNumber(string name, string? parsedIssue, MediaKind kind) => kind switch
+    {
+        MediaKind.Comic => parsedIssue,
+        MediaKind.Manga => ParseChapter(name),
+        _ => null,
+    };
+
+    /// <summary>Volume/number for one file (or image folder) inside a release folder, falling back to the
+    /// release folder's own guesses. Manga and light novels additionally treat a bare trailing number
+    /// ("Name 001") as the volume, since both ship one file per volume — but only as the weakest signal,
+    /// and never when the name is just the series title itself ("Mob Psycho 100" is not volume 100).</summary>
+    private static (string? Volume, string? Number) ParseItemNumbers(
+        string name, string seriesTitle, MediaKind kind, string? folderVolume, string? folderNumber)
+    {
+        var volume = ParseVolume(name) ?? folderVolume;
+        if (kind is MediaKind.Manga or MediaKind.LightNovel
+            && volume is null && !ChapterPattern.IsMatch(name) && !IsSeriesTitle(name, seriesTitle))
+        {
+            volume = ParseIssue(name);
+        }
+
+        return kind switch
+        {
+            MediaKind.Comic => (volume, ParseIssue(name) ?? folderNumber),
+            MediaKind.Manga => (volume, ParseChapter(name) ?? folderNumber),
+            _ => (volume, null),
+        };
+    }
+
+    private static bool IsSeriesTitle(string name, string seriesTitle)
+    {
+        return Alphanumerics(name) == Alphanumerics(seriesTitle);
+
+        static string Alphanumerics(string s) => string.Concat(s.Where(char.IsLetterOrDigit)).ToLowerInvariant();
     }
 
     private static string? ParseVolume(string text)
     {
         var match = VolumePattern.Match(text);
         return match.Success ? match.Groups[1].Value : null;
+    }
+
+    public static string? ParseChapter(string text)
+    {
+        var match = ChapterPattern.Match(text);
+        return match.Success && !match.Groups[2].Success ? match.Groups[1].Value : null;
     }
 
     /// <summary>The issue number from a comic filename. "#017" wins wherever it appears; otherwise a bare
@@ -271,6 +324,7 @@ public sealed class ImportScanner(ChapterFileImporter chapterImporter)
         // A "#17" is never part of a series' name, so drop it from the title — otherwise a folder-per-issue
         // layout would scatter "100 Bullets #017" and "#018" into separate one-file series.
         s = HashIssuePattern.Replace(s, " ");
+        s = ChapterPattern.Replace(s, " ");
 
         var titleTokens = s
             .Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)

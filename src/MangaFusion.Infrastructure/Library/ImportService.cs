@@ -59,12 +59,11 @@ public sealed class ImportService(
                 foreach (var file in group.Files)
                 {
                     // Manga and comics are distributed differently, so the same filename means different
-                    // things. A manga release is one file per *volume* (a purchased digital volume), which
-                    // is a whole-volume import with no chapter number — see ChapterNumber.Normalize. A comic
-                    // release is one file per *issue* ("100 Bullets #017.cbz"), and the issue number is the
-                    // chapter number. Either way the user can still correct both fields before committing.
-                    var isComic = batch.Kind == MediaKind.Comic;
-
+                    // things. A manga release is usually one file per *volume* (a purchased digital volume),
+                    // a whole-volume import with no chapter number — see ChapterNumber.Normalize — unless
+                    // the name carries an explicit "Ch." marker. A comic release is one file per *issue*
+                    // ("100 Bullets #017.cbz"), and the issue number is the chapter number. The scanner
+                    // applies those per-kind rules; the user can still correct both fields before committing.
                     importSeries.Items.Add(new ImportItem
                     {
                         FolderName = file.FolderName,
@@ -73,7 +72,7 @@ public sealed class ImportService(
                         ParsedVolume = file.ParsedVolume,
                         PageCount = file.PageCount,
                         SizeBytes = file.SizeBytes,
-                        Number = isComic ? file.ParsedNumber : null,
+                        Number = file.ParsedNumber,
                         Volume = file.ParsedVolume,
                     });
                 }
