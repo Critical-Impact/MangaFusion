@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using MangaFusion.Domain.Library;
+using Microsoft.Extensions.Logging;
 
 namespace MangaFusion.Infrastructure.Library;
 
@@ -24,7 +25,7 @@ public sealed record ScannedImportGroup(string GroupTitle, IReadOnlyList<Scanned
 /// purchases are typically organized — publisher/scene-style folder names, no ComicInfo.xml). Parses a
 /// best-effort title + volume number from each folder name and groups same-title folders together.
 /// Pure local I/O — no network calls, no DB.</summary>
-public sealed class ImportScanner(ChapterFileImporter chapterImporter)
+public sealed class ImportScanner(ChapterFileImporter chapterImporter, ILogger<ImportScanner> logger)
 {
     private static readonly HashSet<string> NoiseTokens = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -182,8 +183,9 @@ public sealed class ImportScanner(ChapterFileImporter chapterImporter)
             var pages = chapterImporter.CountPages(file, sourceKind.Value);
             return pages == 0 ? null : (sourceKind.Value, pages);
         }
-        catch (InvalidOperationException)
+        catch (Exception ex)
         {
+            logger.LogWarning(ex, "Skipping unreadable import file {File}: {Message}", file, ex.Message);
             return null;
         }
     }

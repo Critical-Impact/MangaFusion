@@ -3,6 +3,7 @@ using MangaFusion.Domain.Library;
 using MangaFusion.Infrastructure.Library;
 using MangaFusion.Infrastructure.Writing;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace MangaFusion.IntegrationTests;
 
@@ -18,7 +19,7 @@ public class ImportScannerRecursionTests : IDisposable
         var chapterImporter = new ChapterFileImporter(
             null!, null!, writers, new ArtifactFileInspector(), new PdfPageExtractor(config),
             new CbrPageExtractor(), new EpubPageExtractor());
-        _scanner = new ImportScanner(chapterImporter);
+        _scanner = new ImportScanner(chapterImporter, NullLogger<ImportScanner>.Instance);
     }
 
     public void Dispose() => Directory.Delete(_inbox, recursive: true);
@@ -74,6 +75,17 @@ public class ImportScannerRecursionTests : IDisposable
         Assert.Equal(ChapterSourceKind.ProseEpub, file.Kind);
         Assert.Equal("1", file.ParsedVolume);
         Assert.Equal(0, file.PageCount); // prose: whole-volume chapter, no page count
+    }
+
+    [Fact]
+    public async Task ScanInbox_skips_a_corrupt_cbz_without_failing_the_scan()
+    {
+        await WriteCbzAsync(Path.Combine(_inbox, "Some Series", "Some Series v01.cbz"), pages: 2);
+        await File.WriteAllBytesAsync(Path.Combine(_inbox, "Some Series", "Some Series v02.cbz"), [1, 2, 3]);
+
+        var file = Assert.Single(Assert.Single(_scanner.ScanInbox(_inbox, MediaKind.Manga)).Files);
+
+        Assert.Equal("1", file.ParsedVolume);
     }
 
     [Theory]
